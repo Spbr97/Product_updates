@@ -1,8 +1,25 @@
-.venv/
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
 .env
-data/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Playwright
 playwright/.cache/
 
-*.egg-info/
+# Local data
+data/
+*.sqlite3

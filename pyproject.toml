@@ -1,24 +1,37 @@
 [project]
-name = "product-updates"
+name = "product-tracker"
 version = "0.1.0"
-description = "Local, configurable product-price monitor for Indian retailers"
-requires-python = ">=3.11"
+description = "Extensible product price and availability tracking platform"
+readme = "README.md"
+requires-python = ">=3.12"
 dependencies = [
+  "alembic>=1.13",
   "APScheduler>=3.10,<4",
   "beautifulsoup4>=4.12",
+  "fastapi>=0.115",
   "httpx>=0.27",
+  "psycopg[binary]>=3.1",
   "pydantic>=2.7",
   "pydantic-settings>=2.2",
-  "PyYAML>=6.0",
-  "python-dotenv>=1.0",
+  "rich>=13.7",
+  "SQLAlchemy>=2.0.30",
+  "structlog>=24.1",
+  "tenacity>=8.2",
+  "typer>=0.12",
+  "uvicorn[standard]>=0.30",
 ]
 
 [project.optional-dependencies]
 browser = ["playwright>=1.45"]
-dev = ["pytest>=8.0"]
+dev = [
+  "mypy>=1.10",
+  "pytest>=8.0",
+  "respx>=0.21",
+  "ruff>=0.5",
+]
 
 [project.scripts]
-product-updates = "product_updates.cli:main"
+product-tracker = "product_tracker.cli.main:run"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -27,6 +40,37 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+product_tracker = ["stores/selectors/*.yaml"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  "db: test requires a live PostgreSQL database (TEST_DATABASE_URL)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "C4", "RUF"]
+ignore = ["B008"]  # FastAPI/Typer use callables in argument defaults by design.
+
+[tool.ruff.lint.per-file-ignores]
+"migrations/*" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["apscheduler.*", "bs4.*", "playwright.*"]
+ignore_missing_imports = true

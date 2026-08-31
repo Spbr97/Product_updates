@@ -1,32 +1,310 @@
-# Product Updates
+# Product Tracker
 
-`Product Updates` is a local price monitor. It stores every observed price in SQLite and alerts only when a price, availability, or listing changes. The starter configuration monitors the base iPhone 17 for PIN `560037` and excludes Pro/Air/used/accessory listings.
+Track product prices and availability across e-commerce sites. Give it a product URL; it
+identifies the store, extracts the price and stock state, records history, evaluates alert
+rules, and notifies you through configured providers — on a schedule, in the background.
 
-## Quick start (Windows PowerShell)
+Built to be extended: adding a store, a notification channel, or an alert condition means
+adding a module, not editing the tracking engine.
+
+> **Status: phase 1 of 7 complete (foundation).** Configuration, database schema,
+> migrations, logging, the FastAPI skeleton, and a working CLI are in place. Product
+> tracking lands in phase 2 — see [Roadmap](#roadmap).
+
+---
+
+## 1. What this project does
+
+- **Track by URL.** Paste a product link from any supported site. A generic schema.org
+  adapter handles sites that publish structured data; named adapters add tuned extraction.
+- **Price and availability, separately.** A failure to read a price is recorded as
+  "unknown", never as "out of stock". Extraction failures and stock states are different
+  facts and are stored as such.
+- **Full history.** Every meaningful price observation is appended, never overwritten. The
+  schema answers current/lowest/highest/average price, change over time, and when the low
+  occurred.
+- **Configurable alerts.** Rules ("price dropped", "below ₹69,999", "back in stock") are
+  data, not code branches. Notifications are deduplicated so a retried job cannot alert you
+  twice.
+- **Runs itself.** A worker process checks products on a per-product interval, retries
+  transient failures, throttles requests per store, and records every attempt.
+- **Two interfaces.** A Typer CLI for humans and a versioned FastAPI for a future web or
+  mobile frontend.
+
+**What it does not do:** bypass CAPTCHAs, authentication, or any access control. When a
+store cannot be read, the check is recorded as failed with the reason. It never invents a
+price.
+
+## 2. Architecture
+
+```
+          CLI (Typer)            FastAPI (/api/v1)
+                \                    /
+                 +--> Services <----+
+                      |      |
+         Tracking Engine    Rule Engine
+              |                  |
+      Store Adapters      Notification Providers
+              |                  |
+       E-commerce sites     Email / Telegram / Webhook
+              |
+        Repositories --> PostgreSQL (price history)
+                              ^
+                              |
+                  Scheduler / Background Worker
+```
+
+Dependencies point inward. `api`, `cli`, and `scheduler` depend on `services`; `services`
+depend on `repositories` and on *interfaces* (`StoreAdapter`, `NotificationProvider`,
+`RuleEvaluator`, `JobQueue`); `domain` depends on nothing.
+
+The tracking engine never imports a concrete store or provider. That is the property that
+makes the system extensible, and it is enforced by the direction of imports.
+
+Four extension points:
+
+| Interface | Location | Add one by |
+|---|---|---|
+| `StoreAdapter` | `stores/base.py` | New module in `stores/`, register it, add a catalogue entry |
+| `NotificationProvider` | `notifications/base.py` | New module in `notifications/`, register it |
+| `RuleEvaluator` | `services/rules_engine.py` | New evaluator, register it against a `RuleType` |
+| `JobQueue` | `scheduler/jobqueue.py` | New implementation (e.g. Celery) — engine untouched |
+
+### Deliberate deviations from a plain layered layout
+
+1. **One installable package** (`src/product_tracker/`) rather than bare `src/api`,
+   `src/core`, … — no `sys.path` juggling, no top-level name collisions.
+2. **`domain/models.py` vs `db/models.py`.** The first is pure value objects; the second is
+   SQLAlchemy. Keeping a separate top-level `models/` would blur exactly the boundary the
+   design depends on.
+3. **No Redis/Celery in v1.** Scheduling sits behind a `JobQueue` interface with an
+   APScheduler implementation that persists jobs in PostgreSQL. Celery becomes a drop-in
+   implementation when horizontal scale is actually needed. `REDIS_URL` is reserved but
+   unused.
+
+## 3. Project structure
+
+```
+src/product_tracker/
+  core/          Settings (pydantic-settings), structured logging, security helpers
+  domain/        Enums, frozen value objects, exception hierarchy. Imports nothing.
+  db/            Declarative base, ORM models, engine/session management
+  repositories/  Data access, one class per aggregate. Never commits.
+  stores/        StoreAdapter interface, registry, per-store adapters, selector configs
+  notifications/ NotificationProvider interface, registry, per-channel providers
+  services/      Tracking engine, rule engine, statistics, change detection
+  scheduler/     JobQueue interface, APScheduler implementation, throttling
+  workers/       Entrypoints invoked by scheduled jobs
+  api/           FastAPI app factory, routers, schemas, dependencies, error envelope
+  cli/           Typer commands
+  utils/         URL validation/SSRF guard, money parsing
+migrations/      Alembic environment and versions
+docker/          Dockerfile, docker-compose.yml, entrypoint
+tests/           unit/ (no I/O), integration/ (real PostgreSQL), fixtures/ (saved pages)
+```
+
+## 4. Requirements
+
+- **Python 3.12+**
+- **PostgreSQL 14+** (16 recommended; compose provides it)
+- **Docker + Docker Compose** — optional, but the easiest way to get PostgreSQL
+- **Playwright + Chromium** — optional, only for sites needing JavaScript rendering
+
+## 5. Local setup
 
 ```powershell
-cd Product_Updates
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e ".[browser,dev]"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1          # Linux/macOS: source .venv/bin/activate
+pip install -e ".[dev]"                # add ,browser for Playwright support
+Copy-Item .env.example .env            # then edit .env
+```
+
+With the browser extra:
+
+```powershell
+pip install -e ".[dev,browser]"
 playwright install chromium
-Copy-Item .env.example .env
-product-updates check
-product-updates run
 ```
 
-Set Telegram, SMTP, or webhook settings in `.env` for alerts. `check` performs one scan; `run` checks every 60 minutes by default. The local database is `data/prices.sqlite3`.
+## 6. Environment variables
 
-## Retailer coverage
+Every setting is read from the environment or `.env`. Nothing is hard-coded and no
+credential is committed. `.env.example` is the full annotated list; the ones that matter
+most:
 
-The app scans Amazon India, Flipkart, Blinkit, BigBasket, Croma, Reliance Digital, and Vijay Sales through their search pages. Retailer layouts, location requirements, and anti-bot controls can prevent an automated read; the app reports those sources rather than inventing a price. For the highest reliability, add direct product page links under `listing_urls` in `config.yaml` once you find them.
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | *(required)* | PostgreSQL DSN. `postgres://` and `postgresql://` are normalised onto psycopg 3. |
+| `TEST_DATABASE_URL` | — | Throwaway database for integration tests. Unset ⇒ those tests skip. |
+| `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | Use `console` locally for readable output. |
+| `CHECK_INTERVAL_SECONDS` | `3600` | Default per-product interval. Floor of 60s. |
+| `HTTP_TIMEOUT_SECONDS` / `HTTP_MAX_RETRIES` | `25` / `3` | Outbound request bounds. |
+| `STORE_MIN_INTERVAL_SECONDS` / `FETCH_JITTER_SECONDS` | `5` / `3` | Politeness: minimum gap between requests to one store, plus random jitter. |
+| `PLAYWRIGHT_ENABLED` | `true` | Set `false` to run without a browser. |
+| `API_KEY` | *(unset)* | If set, required as `X-API-Key` on mutating endpoints. |
+| `BLOCK_PRIVATE_ADDRESSES` | `true` | SSRF guard. Rejects URLs resolving to private/loopback ranges. |
+| `NOTIFY_DEFAULT_PROVIDERS` | `console` | Comma-separated provider slugs. |
 
-## Start automatically with Windows
+Secrets (`SMTP_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `API_KEY`) are held as `SecretStr`, masked
+by `product-tracker config`, and stripped from logs by a redaction processor.
 
-After setting a notification destination in `.env`, run:
+## 7. Database setup
+
+Start PostgreSQL and apply migrations:
 
 ```powershell
-.\scripts\install-scheduled-task.ps1
+docker compose -f docker/docker-compose.yml up -d db
+alembic upgrade head
+product-tracker stores sync      # populate the store catalogue
+product-tracker status           # verify
 ```
 
-This starts the monitor at sign-in and restarts it if it exits. The first successful scan saves a baseline silently; notifications begin with a later detected change.
+Without Docker, create the database yourself and point `DATABASE_URL` at it:
+
+```sql
+CREATE USER tracker WITH PASSWORD 'choose-your-own';
+CREATE DATABASE tracker OWNER tracker;
+CREATE DATABASE tracker_test OWNER tracker;   -- for the test suite
+```
+
+Migrations are hand-written where it matters (the six shared enum types are created once,
+not once per column). `alembic downgrade base` is tested and reversible.
+
+## 8. Running the API
+
+```powershell
+uvicorn product_tracker.api.app:get_app --factory --reload
+```
+
+- `GET /health` — liveness. Never touches the database, so a database outage does not get
+  the process restarted.
+- `GET /health/ready` — readiness. Reports each dependency; 503 when one is down. An
+  unmigrated database counts as not ready.
+- `GET /docs` — OpenAPI UI. `GET /openapi.json` — schema.
+- `/api/v1/...` — versioned resources (products, history, alerts, stores; phases 2–6).
+
+Every error response uses one envelope:
+
+```json
+{ "error": { "type": "not_found", "message": "Product 42 not found", "detail": null } }
+```
+
+## 9. Running the CLI
+
+```powershell
+product-tracker --help
+product-tracker status          # config + database + tracking state
+product-tracker config          # effective settings, secrets redacted
+product-tracker stores list
+product-tracker stores sync
+```
+
+Exit codes: `0` success · `1` unexpected error · `2` not found · `3` store failure ·
+`4` configuration error.
+
+Commands arriving in later phases: `add`, `list`, `show`, `remove`, `check`, `history`,
+`pause`, `resume`, `alerts add|list|remove`, `worker`.
+
+## 10. Running the scheduler/workers
+
+Lands in phase 5. The worker will run as its own process, separate from the API:
+
+```powershell
+product-tracker worker
+# or: docker compose -f docker/docker-compose.yml --profile worker up
+```
+
+It persists jobs in PostgreSQL with deterministic per-product IDs (so restarts cannot
+create duplicate jobs), reconciles against the database on an interval, retries transient
+failures with backoff, and throttles per store.
+
+## 11. Adding a new store adapter
+
+1. Add a `StoreInfo` entry to `stores/catalogue.py` (slug, display name, domains, adapter key).
+2. Create `stores/<slug>.py` implementing `StoreAdapter`: `can_handle_url` and
+   `fetch_product`.
+3. Keep CSS/XPath selectors in `stores/selectors/<slug>.yaml`, not in the code.
+4. Register the adapter in `stores/registry.py`.
+5. Save a real page to `tests/fixtures/` and write extraction tests against the file. Tests
+   must never hit the live site.
+6. `product-tracker stores sync`.
+
+The tracking engine needs no change. Return `FetchOutcome.PRICE_NOT_FOUND` when a price is
+missing and leave availability `UNKNOWN` — never report out-of-stock because parsing failed.
+
+## 12. Adding a new notification provider
+
+1. Create `notifications/<slug>.py` implementing `NotificationProvider`: `is_configured`
+   and `send`.
+2. Add its settings to `core/config.py` (secrets as `SecretStr`) and `.env.example`.
+3. Register it in `notifications/registry.py`.
+4. Add it to `NOTIFY_DEFAULT_PROVIDERS`.
+
+Raise `NotificationDeliveryError` on failure; the service records it and retries within
+bounds. Providers never know why a notification exists.
+
+## 13. Adding a new tracking condition
+
+1. Add a member to `RuleType` in `domain/enums.py` **and** an `ALTER TYPE ... ADD VALUE`
+   migration.
+2. Write an evaluator in `services/rules_engine.py` — a pure function of `RuleContext`
+   returning `RuleMatch | None`.
+3. Register it against the new `RuleType`.
+4. Document any `params` keys it reads (rule parameters live in a JSONB column, so no
+   schema change is needed for the settings themselves).
+
+## 14. Running tests
+
+```powershell
+pytest                       # unit tests always; integration tests skip without a database
+pytest -m "not db"           # unit only, explicitly
+ruff check .
+mypy
+```
+
+Integration tests need `TEST_DATABASE_URL` pointing at a **throwaway** database — the suite
+migrates it up and tears it down. Store-extraction tests run against saved fixtures, so the
+suite never depends on Amazon or Flipkart being online.
+
+## 15. Docker setup
+
+```powershell
+docker compose -f docker/docker-compose.yml up -d db
+docker compose -f docker/docker-compose.yml run --rm migrate
+docker compose -f docker/docker-compose.yml up api
+docker compose -f docker/docker-compose.yml --profile worker up   # phase 5
+```
+
+The default image is lean and runs as a non-root user. For browser rendering, build against
+the Playwright base image:
+
+```powershell
+docker build -f docker/Dockerfile `
+  --build-arg BASE_IMAGE=mcr.microsoft.com/playwright/python:v1.47.0-jammy `
+  --build-arg EXTRAS=browser -t product-tracker:browser .
+```
+
+## 16. Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `invalid configuration: ... database_url Field required` | No `DATABASE_URL`. Copy `.env.example` to `.env`. Exit code 4. |
+| `DATABASE_URL must be a PostgreSQL DSN` | SQLite/MySQL URL supplied. PostgreSQL is the only supported database. |
+| `/health/ready` returns 503, `no alembic_version` | Database reachable but unmigrated. Run `alembic upgrade head`. |
+| `status` says "no stores registered" | Run `product-tracker stores sync`. |
+| Integration tests all skip | `TEST_DATABASE_URL` is unset. That is intentional, not a failure. |
+| Readiness hangs | Should not happen: `DB_CONNECT_TIMEOUT_SECONDS` (default 5) bounds connection attempts. |
+| A store reports `blocked` | The site served an anti-bot challenge. This is recorded, not worked around. Try a direct product URL, or accept that the store is unreadable. |
+| `Playwright is not installed` | `pip install -e ".[browser]"` then `playwright install chromium`, or set `PLAYWRIGHT_ENABLED=false`. |
+
+## Roadmap
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Foundation: config, database, models, migrations, logging, CLI, API skeleton | **done** |
+| 2 | Store adapter interface, generic + Flipkart adapters, URL validation, manual check | next |
+| 3 | Price/availability history, statistics, change detection | |
+| 4 | Tracking rules, notification abstraction, providers, deduplication | |
+| 5 | Scheduler, background worker, retries, rate limiting | |
+| 6 | Complete API and CLI surface, auth, pagination | |
+| 7 | Test coverage, Docker polish, docs, security and performance review | |
