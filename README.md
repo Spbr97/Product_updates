@@ -296,6 +296,9 @@ docker build -f docker/Dockerfile `
 | Readiness hangs | Should not happen: `DB_CONNECT_TIMEOUT_SECONDS` (default 5) bounds connection attempts. |
 | A store reports `blocked` | The site served an anti-bot challenge. This is recorded, not worked around. Try a direct product URL, or accept that the store is unreadable. |
 | `Playwright is not installed` | `pip install -e ".[browser]"` then `playwright install chromium`, or set `PLAYWRIGHT_ENABLED=false`. |
+| `Docker Desktop is unable to start` (Windows) | Windows Home can only use the WSL2 backend. In an **Administrator** shell: `wsl --install`, then reboot. |
+| Docker daemon down after a reboot (Windows) | Docker Desktop does not always auto-start. Run `docker desktop start`, or enable "Start Docker Desktop when you sign in" in its settings. |
+| `docker` not found in an already-open shell | The installer edits PATH; existing shells keep the old one. Open a new terminal, or call `…\Programs\DockerDesktop\resources\bin\docker.exe` directly. |
 
 ## Roadmap
 

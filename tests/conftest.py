@@ -28,12 +28,15 @@ DUMMY_DSN = "postgresql+psycopg://user:pass@localhost:5432/unit_tests"
 
 @pytest.fixture(autouse=True)
 def _isolate_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Stop a developer's real .env from leaking into tests.
+    """Stop a developer's real .env, and other tests, from leaking into this one.
 
-    Every ``Settings``-affecting variable is cleared, and the cache is dropped before and
-    after each test so one test's environment cannot bleed into the next.
+    Both caches are dropped, not just settings: the engine is derived from settings but
+    cached independently, so clearing only settings would leave a live engine still bound
+    to the previous test's database. That is not hypothetical -- it made the
+    "database is down" readiness test pass against a real database.
     """
     from product_tracker.core.config import Settings, reset_settings_cache
+    from product_tracker.db.session import reset_engine_cache
 
     for field_name in Settings.model_fields:
         monkeypatch.delenv(field_name.upper(), raising=False)
@@ -42,8 +45,10 @@ def _isolate_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.chdir(PROJECT_ROOT / "tests")
 
     reset_settings_cache()
+    reset_engine_cache()
     yield
     reset_settings_cache()
+    reset_engine_cache()
 
 
 @pytest.fixture
