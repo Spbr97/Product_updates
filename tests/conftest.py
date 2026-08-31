@@ -115,13 +115,63 @@ def migrated_database(database_url: str) -> Iterator[str]:
 
 @pytest.fixture
 def db_env(migrated_database: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point settings at the migrated test database for a single test."""
+    """Point settings at the migrated test database for a single test.
+
+    The SSRF guard is off by default here. It resolves DNS, and test URLs use hostnames
+    that deliberately do not exist -- leaving it on would make every test depend on a
+    working resolver. Tests that exercise the guard turn it back on via
+    :func:`strict_url_policy` and use IP literals, which need no lookup.
+    """
     from product_tracker.core.config import reset_settings_cache
     from product_tracker.db.session import reset_engine_cache
 
     monkeypatch.setenv("DATABASE_URL", migrated_database)
+    monkeypatch.setenv("BLOCK_PRIVATE_ADDRESSES", "false")
     reset_settings_cache()
     reset_engine_cache()
+
+
+@pytest.fixture
+def strict_url_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-enable the SSRF guard for a test. Use IP literals to avoid a DNS lookup."""
+    from product_tracker.core.config import reset_settings_cache
+
+    monkeypatch.setenv("BLOCK_PRIVATE_ADDRESSES", "true")
+    reset_settings_cache()
+
+
+#: Tables holding test-created data. ``stores`` is excluded -- it is seeded by migration
+#: and products reference it.
+_DATA_TABLES = (
+    "notifications",
+    "tracking_rules",
+    "availability_history",
+    "price_history",
+    "check_executions",
+    "products",
+)
+
+
+@pytest.fixture
+def clean_db(db_env: None) -> Iterator[None]:
+    """Start from an empty database, with identity sequences reset.
+
+    Needed by CLI and API tests: those open their own sessions and commit, so the
+    rollback in ``db_session`` cannot undo them. Resetting identities also makes ``1`` a
+    predictable first product id.
+    """
+    from sqlalchemy import text
+
+    from product_tracker.db.session import get_engine
+
+    statement = text(
+        f"TRUNCATE {', '.join(_DATA_TABLES)} RESTART IDENTITY CASCADE"
+    )
+    with get_engine().begin() as connection:
+        connection.execute(statement)
+    yield
+    with get_engine().begin() as connection:
+        connection.execute(statement)
 
 
 @pytest.fixture

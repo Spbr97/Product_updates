@@ -7,9 +7,9 @@ rules, and notifies you through configured providers — on a schedule, in the b
 Built to be extended: adding a store, a notification channel, or an alert condition means
 adding a module, not editing the tracking engine.
 
-> **Status: phase 1 of 7 complete (foundation).** Configuration, database schema,
-> migrations, logging, the FastAPI skeleton, and a working CLI are in place. Product
-> tracking lands in phase 2 — see [Roadmap](#roadmap).
+> **Status: phases 1–2 of 7 complete.** You can add products by URL, check them, and
+> see price and availability. History, alerts, and scheduling are next — see
+> [Roadmap](#roadmap).
 
 ---
 
@@ -181,7 +181,13 @@ uvicorn product_tracker.api.app:get_app --factory --reload
 - `GET /health/ready` — readiness. Reports each dependency; 503 when one is down. An
   unmigrated database counts as not ready.
 - `GET /docs` — OpenAPI UI. `GET /openapi.json` — schema.
-- `/api/v1/...` — versioned resources (products, history, alerts, stores; phases 2–6).
+- `/api/v1/products` — `POST` to track, `GET` to list (paginated, filterable by
+  `store` and `tracking_status`).
+- `/api/v1/products/{id}` — `GET` one, `DELETE` to stop tracking.
+- `/api/v1/products/{id}/check` — `POST` to check now. Returns **200 with a failed
+  execution** when a store cannot be read: that is a recorded fact, not a broken API.
+- `/api/v1/stores` — supported stores, from the adapter registry.
+- History and alert routes arrive in phases 3–4.
 
 Every error response uses one envelope:
 
@@ -202,8 +208,16 @@ product-tracker stores sync
 Exit codes: `0` success · `1` unexpected error · `2` not found · `3` store failure ·
 `4` configuration error.
 
-Commands arriving in later phases: `add`, `list`, `show`, `remove`, `check`, `history`,
-`pause`, `resume`, `alerts add|list|remove`, `worker`.
+```powershell
+product-tracker add <URL> [--interval 3600] [--no-check]
+product-tracker list [--store flipkart] [--status active] [--limit 20]
+product-tracker show <ID>
+product-tracker check <ID>
+product-tracker remove <ID> [--yes]
+```
+
+Commands arriving in later phases: `history`, `pause`, `resume`,
+`alerts add|list|remove`, `worker`.
 
 ## 10. Running the scheduler/workers
 
@@ -305,8 +319,8 @@ docker build -f docker/Dockerfile `
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Foundation: config, database, models, migrations, logging, CLI, API skeleton | **done** |
-| 2 | Store adapter interface, generic + Flipkart adapters, URL validation, manual check | next |
-| 3 | Price/availability history, statistics, change detection | |
+| 2 | Store adapter interface, generic + Flipkart adapters, URL validation, manual check | **done** |
+| 3 | Price/availability history, statistics, change detection | next |
 | 4 | Tracking rules, notification abstraction, providers, deduplication | |
 | 5 | Scheduler, background worker, retries, rate limiting | |
 | 6 | Complete API and CLI surface, auth, pagination | |

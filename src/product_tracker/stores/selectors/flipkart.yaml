@@ -1,0 +1,35 @@
+# CSS selectors for Flipkart product pages.
+#
+# Selectors are listed most-specific first; the first one that matches wins. Flipkart
+# rotates its obfuscated class names regularly, so several generations are kept — an old
+# selector that no longer matches costs nothing, while a missing one costs a broken check.
+#
+# When extraction starts failing, update this file. No Python change should be needed.
+
+name:
+  - "span.VU-ZEz"
+  - "span.B_NuCI"
+  - "h1 span.B_NuCI"
+  - "h1._6EBuvT span"
+  - "h1 span"
+
+price:
+  - "div.Nx9bqj.CxhGGd"
+  - "div._30jeq3._16Jk6d"
+  - "div.Nx9bqj"
+  - "div._30jeq3"
+
+# Presence of any of these means Flipkart said the item is not purchasable.
+out_of_stock:
+  - "div._16FRp0"
+  - "div.Z8JjpR"
+  - "div._1dVbu9"
+
+image:
+  - "img._396cs4"
+  - "img.DByuf4"
+  - "img._2r_T1I"
+  - 'meta[property="og:image"]'
+
+# Query parameter carrying the variant/product identifier.
+identifier_param: pid

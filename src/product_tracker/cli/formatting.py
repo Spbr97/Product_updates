@@ -6,10 +6,33 @@ list | grep ...`` stays usable.
 
 from __future__ import annotations
 
+import sys
+from contextlib import suppress
 from enum import IntEnum
+from typing import IO, Any
 
 from rich.console import Console
 from rich.table import Table
+
+
+def _use_utf8(stream: IO[Any] | None) -> None:
+    """Switch a console stream to UTF-8.
+
+    Windows consoles still default to a legacy code page (cp1252 here), which cannot
+    encode the currency symbols prices are formatted with -- printing a rupee price
+    raised ``UnicodeEncodeError`` and took the whole command down. ``errors="replace"``
+    is a second line of defence so an unencodable character degrades to a placeholder
+    instead of crashing.
+
+    Streams that do not support reconfiguration (a pipe under test capture, for
+    instance) are left alone.
+    """
+    with suppress(AttributeError, ValueError, OSError):
+        stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+
+
+_use_utf8(sys.stdout)
+_use_utf8(sys.stderr)
 
 stdout = Console()
 stderr = Console(stderr=True)

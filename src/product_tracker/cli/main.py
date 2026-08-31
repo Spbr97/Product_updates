@@ -15,7 +15,7 @@ from .. import __version__
 from ..core.config import get_settings
 from ..core.logging import configure_logging
 from ..domain.errors import ConfigurationError
-from . import system
+from . import products, system
 from .formatting import ExitCode, error, stdout
 
 app = typer.Typer(
@@ -28,6 +28,12 @@ app = typer.Typer(
 app.add_typer(system.stores_app, name="stores")
 app.command("status")(system.status)
 app.command("config")(system.config_show)
+
+app.command("add")(products.add)
+app.command("list")(products.list_products)
+app.command("show")(products.show)
+app.command("remove")(products.remove)
+app.command("check")(products.check)
 
 
 def _version_callback(value: bool) -> None:

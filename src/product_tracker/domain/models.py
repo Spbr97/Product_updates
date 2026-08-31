@@ -28,6 +28,11 @@ class FetchContext:
     user_agent: str = "Mozilla/5.0 (compatible; product-tracker/0.1)"
     accept_language: str = "en-IN,en;q=0.9"
     max_bytes: int = 5_000_000
+    #: Re-check that the host is public immediately before connecting, and again after
+    #: any redirect. Carried here rather than read from global settings so the policy is
+    #: explicit at the call site -- and so disabling it (to track an internal host on
+    #: purpose) actually disables it at fetch time, not only at validation time.
+    verify_public_host: bool = True
 
 
 @dataclass(frozen=True, slots=True)
