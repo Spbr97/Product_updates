@@ -1,0 +1,32 @@
+[project]
+name = "product-updates"
+version = "0.1.0"
+description = "Local, configurable product-price monitor for Indian retailers"
+requires-python = ">=3.11"
+dependencies = [
+  "APScheduler>=3.10,<4",
+  "beautifulsoup4>=4.12",
+  "httpx>=0.27",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.2",
+  "PyYAML>=6.0",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.45"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+product-updates = "product_updates.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

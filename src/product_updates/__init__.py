@@ -1,0 +1,2 @@
+"""Local product price monitoring."""
+

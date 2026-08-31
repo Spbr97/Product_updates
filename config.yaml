@@ -1,0 +1,49 @@
+# A listing is accepted only when its title contains every required term and none
+# of the excluded terms. Add direct listing URLs below for the most reliable data.
+product:
+  name: "Apple iPhone 17"
+  pincode: "560037"
+  required_terms: ["iphone", "17"]
+  excluded_terms: ["pro", "pro max", "air", "refurbished", "renewed", "used", "case", "cover", "screen protector"]
+  currency: "INR"
+
+schedule:
+  minutes: 60
+  request_timeout_seconds: 25
+
+scraper:
+  browser_fallback: true
+
+retailers:
+  - name: Flipkart
+    search_url: "https://www.flipkart.com/search?q=Apple%20iPhone%2017"
+    search_url_template: "https://www.flipkart.com/search?q={query}"
+  - name: BigBasket
+    search_url: "https://www.bigbasket.com/ps/?q=Apple%20iPhone%2017"
+    search_url_template: "https://www.bigbasket.com/ps/?q={query}"
+  - name: Croma
+    search_url: "https://www.croma.com/searchB?q=Apple%20iPhone%2017%3Arelevance"
+    search_url_template: "https://www.croma.com/searchB?q={query}"
+  - name: Reliance Digital
+    search_url: "https://www.reliancedigital.in/search?q=Apple%20iPhone%2017"
+    search_url_template: "https://www.reliancedigital.in/search?q={query}"
+  - name: Vijay Sales
+    search_url: "https://www.vijaysales.com/search/iphone%2017"
+    search_url_template: "https://www.vijaysales.com/search/{query}"
+
+# Direct product pages are more reliable than search results. These are all
+# 256 GB iPhone 17 listings supplied by the user; colour can differ by store.
+direct_listings:
+  - name: Flipkart
+    url: "https://www.flipkart.com/apple-iphone-17-black-256-gb/p/itm6eb39da622cdd?pid=MOBHFN6YN2HXB5HE&lid=LSTMOBHFN6YN2HXB5HER9QXGU"
+  - name: Vijay Sales
+    url: "https://www.vijaysales.com/p/P245179/245183/apple-iphone-17-256gb-storage-sage"
+  - name: Croma
+    url: "https://www.croma.com/apple-iphone-17-256gb-black-/p/317396"
+  - name: BigBasket
+    url: "https://www.bigbasket.com/pd/40356301/apple-iphone-17-256gb-white-1-unit/"
+  - name: Reliance Digital
+    url: "https://www.reliancedigital.in/product/apple-iphone-17-256-gb-black-mff8ru-9391619"
+
+# Backward-compatible anonymous direct URLs, if needed.
+listing_urls: []
