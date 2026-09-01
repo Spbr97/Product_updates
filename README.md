@@ -1,5 +1,7 @@
 # Product Tracker
 
+[![CI](https://github.com/Spbr97/Product_updates/actions/workflows/ci.yml/badge.svg)](https://github.com/Spbr97/Product_updates/actions/workflows/ci.yml)
+
 Track product prices and availability across e-commerce sites. Give it a product URL; it
 identifies the store, extracts the price and stock state, records history, evaluates alert
 rules, and notifies you through configured providers — on a schedule, in the background.
@@ -387,6 +389,22 @@ mypy
 Integration tests need `TEST_DATABASE_URL` pointing at a **throwaway** database — the suite
 migrates it up and tears it down. Store-extraction tests run against saved fixtures, so the
 suite never depends on Amazon or Flipkart being online.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push and pull request, in four jobs:
+
+- **lint and types** — `ruff` and `mypy`.
+- **tests** — the full suite against a real PostgreSQL, on Python 3.12 and 3.13. It also
+  asserts that the database-backed tests were actually *collected*: a broken
+  `TEST_DATABASE_URL` would otherwise skip ~350 tests and still report green, which is
+  worse than a red build.
+- **migrations** — up, down to base, and up again. The second upgrade is the point: it
+  catches anything created but not dropped, such as an enum type. It also renders the
+  offline SQL and checks for `VALUES (NULL`, a bug this project has actually shipped.
+- **docker** — builds the image, brings the stack up, checks both probes, confirms the
+  worker wrote a heartbeat, and verifies SIGTERM produces exit code 0 rather than a kill.
+  That last one cannot be tested on Windows.
 
 ## 15. Docker setup
 

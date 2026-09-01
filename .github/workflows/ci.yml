@@ -1,0 +1,184 @@
+name: CI
+
+# Every push and every PR. The point is that "it passed on someone's laptop" stops being
+# the only evidence the suite works.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A newer push supersedes an in-flight run on the same ref.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lint:
+    name: lint and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Mypy
+        run: mypy
+
+  test:
+    name: tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is the declared minimum and the version the Docker image uses; 3.13 catches
+        # deprecations before they become failures.
+        python-version: ["3.12", "3.13"]
+
+    services:
+      postgres:
+        # Matches docker-compose. The integration tests need a real PostgreSQL: there is
+        # no SQLite fallback, deliberately, so that one code path is the tested one.
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tracker
+          POSTGRES_PASSWORD: tracker
+          POSTGRES_DB: tracker_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tracker -d tracker_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Run the suite
+        env:
+          # Integration tests migrate this database up and tear it down.
+          TEST_DATABASE_URL: postgresql+psycopg://tracker:tracker@localhost:5432/tracker_test
+        run: pytest -q --cov=product_tracker --cov-report=term-missing:skip-covered
+
+      - name: Fail if the DB-backed tests were skipped
+        # Without this, a broken TEST_DATABASE_URL would silently skip ~330 tests and the
+        # job would still be green -- which is worse than a red build.
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://tracker:tracker@localhost:5432/tracker_test
+        run: |
+          count=$(pytest -q --collect-only -m db 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)
+          echo "database-backed tests collected: $count"
+          test "$count" -gt 100
+
+  migrations:
+    name: migrations up and down
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tracker
+          POSTGRES_PASSWORD: tracker
+          POSTGRES_DB: tracker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tracker -d tracker"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Upgrade, downgrade, upgrade again
+        # The second upgrade is the point: it catches anything created but not dropped,
+        # such as an enum type, which would fail on "already exists".
+        env:
+          DATABASE_URL: postgresql+psycopg://tracker:tracker@localhost:5432/tracker
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+
+      - name: Offline SQL renders
+        # `alembic upgrade --sql` runs with no connection, where bound parameters in a
+        # text() construct come out as NULL. This has produced a broken seed migration
+        # before, so it is checked.
+        env:
+          DATABASE_URL: postgresql+psycopg://tracker:tracker@localhost:5432/tracker
+        run: |
+          alembic downgrade base
+          alembic upgrade head --sql > /tmp/schema.sql
+          grep -q "CREATE TABLE products" /tmp/schema.sql
+          grep -q "INSERT INTO stores" /tmp/schema.sql
+          ! grep -qE "VALUES \(NULL" /tmp/schema.sql
+
+  docker:
+    name: image builds and the stack comes up
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start
+        run: docker compose -f docker/docker-compose.yml up -d --build --wait --wait-timeout 180
+
+      - name: API answers
+        run: |
+          curl -fsS http://localhost:8000/health
+          curl -fsS http://localhost:8000/health/ready
+
+      - name: The worker reported a heartbeat
+        run: |
+          docker compose -f docker/docker-compose.yml exec -T db \
+            psql -U tracker -d tracker -tAc "SELECT count(*) FROM worker_heartbeats" | grep -q 1
+
+      - name: SIGTERM shuts the worker down cleanly
+        # Exit 0, not 137: the worker must handle the signal rather than be killed at the
+        # end of the grace period. This cannot be tested on Windows.
+        run: |
+          docker compose -f docker/docker-compose.yml stop worker
+          code=$(docker inspect "$(docker compose -f docker/docker-compose.yml ps -aq worker)" --format '{{.State.ExitCode}}')
+          echo "worker exit code: $code"
+          test "$code" = "0"
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.yml logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v
