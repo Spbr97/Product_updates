@@ -132,3 +132,10 @@ class SearchOutcome(StrEnum):
     TIMEOUT = "timeout"
     ERROR = "error"
     UNSUPPORTED = "unsupported"  # No search is configured for this store.
+    #: The store's results need a browser and none is installed. A deployment fact the
+    #: operator can fix, not a statement about the store or the product -- the default
+    #: image is deliberately lean, so this will happen and must not read as "no results".
+    NEEDS_BROWSER = "needs_browser"
+    #: The site's robots.txt asks crawlers not to fetch its search. Not a failure and
+    #: not a block we ran into -- a request we chose not to make.
+    DISALLOWED = "disallowed"

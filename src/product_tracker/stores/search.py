@@ -35,6 +35,8 @@ from ..domain.errors import ConfigurationError
 from ..domain.models import FetchContext, SearchHit, SearchResult
 from ..utils.money import parse_price
 from ..utils.urls import host_of
+from . import browser as browser_module
+from . import robots
 from .http import FetchSuccess
 from .http import fetch as http_fetch
 
@@ -54,6 +56,9 @@ MODEL_QUALIFIERS: frozenset[str] = frozenset(
 )
 
 _TOKEN = re.compile(r"[a-z0-9]+")
+
+#: How a store's results may be fetched.
+_RENDER_MODES = frozenset({"http", "auto", "browser"})
 
 #: How many outcomes map to which fetch failure, so a search reports the same distinctions
 #: a product fetch does.
@@ -95,8 +100,20 @@ class StoreSearch(ABC):
     slug: ClassVar[str]
 
     @abstractmethod
-    def search(self, query: str, ctx: FetchContext, *, limit: int = 10) -> SearchResult:
-        """Return ranked candidates. Never raises -- failures come back as an outcome."""
+    def search(
+        self,
+        query: str,
+        ctx: FetchContext,
+        *,
+        limit: int = 10,
+        use_browser: bool = False,
+    ) -> SearchResult:
+        """Return ranked candidates. Never raises -- failures come back as an outcome.
+
+        ``use_browser`` asks for the results page to be rendered. An implementation whose
+        store needs no rendering may ignore it; one that cannot render should report
+        :attr:`SearchOutcome.NEEDS_BROWSER` rather than quietly returning nothing.
+        """
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +139,17 @@ class SearchConfig:
     #: block, and "nearest ancestor div" reaches either too far (swallowing the neighbour's
     #: rating text) or not far enough (missing the price entirely).
     result_card: str | None = None
+    #: "http" (default), "auto" (HTTP first, render when unreadable), or "browser"
+    #: (render straight away, for shops verified to publish nothing without JavaScript).
+    render: str = "http"
+    #: What to wait for once rendered. Worth setting whenever the results have a known
+    #: shape: it returns as soon as they exist instead of sleeping a fixed interval.
+    wait_for: str | None = None
     notes: str | None = None
+
+    @property
+    def may_render(self) -> bool:
+        return self.render in _RENDER_MODES - {"http"}
 
 
 def _as_tuple(value: object) -> tuple[str, ...]:
@@ -143,6 +170,8 @@ _KNOWN_KEYS = frozenset(
         "product_url_pattern",
         "result_card",
         "result_link",
+        "render",
+        "wait_for",
         "title",
         "brand",
         "price",
@@ -172,6 +201,12 @@ def load_search_config(slug: str) -> SearchConfig:
         if not raw.get(required):
             raise ConfigurationError(f"{path.name} is missing required key {required!r}")
 
+    mode = str(raw.get("render", "http"))
+    if mode not in _RENDER_MODES:
+        raise ConfigurationError(
+            f"{path.name} has render: {mode!r}; expected one of {', '.join(sorted(_RENDER_MODES))}"
+        )
+
     return SearchConfig(
         url_template=str(raw["url"]),
         result_link=_as_tuple(raw.get("result_link")),
@@ -181,6 +216,8 @@ def load_search_config(slug: str) -> SearchConfig:
         price=_as_tuple(raw.get("price")),
         image=_as_tuple(raw.get("image")),
         result_card=raw.get("result_card"),
+        render=str(raw.get("render", "http")),
+        wait_for=raw.get("wait_for"),
         notes=raw.get("notes"),
     )
 
@@ -195,11 +232,51 @@ class ConfiguredSearch(StoreSearch):
     def config(self) -> SearchConfig:
         return load_search_config(self.slug)
 
-    def search(self, query: str, ctx: FetchContext, *, limit: int = 10) -> SearchResult:
+    def search(
+        self,
+        query: str,
+        ctx: FetchContext,
+        *,
+        limit: int = 10,
+        use_browser: bool = False,
+    ) -> SearchResult:
+        """Search this store, optionally rendering the results page.
+
+        ``use_browser`` is the caller's decision, not this store's: whether rendering is
+        *permitted* comes from the config's ``render`` mode, whether it is *worth it* comes
+        from the caller, which knows whether the cheap pass already answered the question.
+        """
         config = self.config
         url = config.url_template.format(query=quote_plus(query))
 
-        response = http_fetch(url, ctx)
+        # Asked before the request is made, not after it is refused. A site that publishes
+        # "Disallow: /search?" has said no in the way sites are meant to be able to; going
+        # ahead and reading the 403 as rate limiting is not a misunderstanding, it is not
+        # listening.
+        if not robots.is_allowed(url, ctx):
+            return SearchResult.failure(
+                self.slug,
+                SearchOutcome.DISALLOWED,
+                "this store's robots.txt asks crawlers not to fetch its search results, "
+                "so we do not. Its product pages are still tracked normally.",
+            )
+
+        render = use_browser and config.may_render
+
+        response = (
+            browser_module.render(url, ctx, wait_for=config.wait_for)
+            if render
+            else http_fetch(url, ctx)
+        )
+
+        if render and browser_module.is_unavailable(response):
+            return SearchResult.failure(
+                self.slug,
+                SearchOutcome.NEEDS_BROWSER,
+                "this store publishes its results with JavaScript and no browser is "
+                "installed. " + browser_module.UNAVAILABLE_MESSAGE,
+            )
+
         if not isinstance(response, FetchSuccess):
             outcome = _FETCH_TO_SEARCH.get(response.outcome, SearchOutcome.ERROR)
             return SearchResult.failure(
@@ -230,6 +307,7 @@ class ConfiguredSearch(StoreSearch):
         log.info(
             "search.completed",
             store=self.slug,
+            rendered=render,
             url_host=host_of(url),
             hits=len(hits),
             http_status=response.http_status,

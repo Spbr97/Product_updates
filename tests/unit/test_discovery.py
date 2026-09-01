@@ -122,3 +122,161 @@ class TestCoverage:
 
     def test_at_least_one_store_is_searchable(self) -> None:
         assert searchable_stores()
+
+
+class FakeSearch:
+    """Records how it was called and answers from a script."""
+
+    def __init__(self, slug: str, http: SearchResult, rendered: SearchResult | None) -> None:
+        self.slug = slug
+        self._http = http
+        self._rendered = rendered
+        self.calls: list[bool] = []
+
+    def search(
+        self, query: str, ctx: object, *, limit: int = 10, use_browser: bool = False
+    ) -> SearchResult:
+        self.calls.append(use_browser)
+        if use_browser and self._rendered is not None:
+            return self._rendered
+        return self._http
+
+    @property
+    def rendered_once(self) -> bool:
+        return True in self.calls
+
+
+def unreadable(store: str) -> SearchResult:
+    return SearchResult.failure(store, SearchOutcome.PAGE_STRUCTURE, "no product links")
+
+
+class EscalationHarness:
+    """Wires fake stores and a fake browser into ``discover``."""
+
+    def __init__(self, monkeypatch, searches: dict[str, FakeSearch], render_modes: dict[str, str]):  # type: ignore[no-untyped-def]
+        import contextlib
+
+        from product_tracker.services import discovery as module
+        from product_tracker.stores.search import SearchConfig
+
+        self.searches = searches
+        self.sessions = 0
+
+        @contextlib.contextmanager
+        def fake_session(**_kwargs: object):  # type: ignore[no-untyped-def]
+            self.sessions += 1
+            yield None
+
+        def fake_config(slug: str) -> SearchConfig:
+            return SearchConfig(
+                url_template=f"https://{slug}.example/s?q={{query}}",
+                result_link=(),
+                product_url_pattern="/p/",
+                render=render_modes.get(slug, "http"),
+            )
+
+        monkeypatch.setattr(module, "search_for", lambda slug: searches.get(slug))
+        monkeypatch.setattr(module, "load_search_config", fake_config)
+        monkeypatch.setattr(module.browser, "session", fake_session)
+        monkeypatch.setattr(module, "searchable_stores", lambda: tuple(searches))
+
+
+class TestEscalation:
+    """When the expensive pass is and is not worth running."""
+
+    @staticmethod
+    def settings():  # type: ignore[no-untyped-def]
+        from product_tracker.core.config import Settings
+
+        return Settings(database_url="postgresql+psycopg://x/y")
+
+    def run(self, monkeypatch, searches, render_modes, **kwargs):  # type: ignore[no-untyped-def]
+        from product_tracker.services.discovery import discover
+
+        EscalationHarness(monkeypatch, searches, render_modes)
+        return discover("Galaxy S25", self.settings(), **kwargs)
+
+    def test_an_exact_match_on_the_cheap_pass_skips_rendering(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """The whole point of escalating rather than always rendering."""
+        searches = {
+            "fast": FakeSearch("fast", ok("fast", hit("fast", "Galaxy S25", 1.0)), None),
+            "slow": FakeSearch("slow", unreadable("slow"), None),
+        }
+        found = self.run(monkeypatch, searches, {"slow": "auto"})
+
+        assert found.exact
+        assert not searches["slow"].rendered_once
+
+    def test_no_exact_match_triggers_rendering(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        rendered = ok("slow", hit("slow", "Galaxy S25", 1.0))
+        searches = {
+            "fast": FakeSearch("fast", ok("fast", hit("fast", "iPhone", 0.2)), None),
+            "slow": FakeSearch("slow", unreadable("slow"), rendered),
+        }
+        found = self.run(monkeypatch, searches, {"slow": "auto"})
+
+        assert searches["slow"].rendered_once
+        assert [h.store_slug for h in found.exact] == ["slow"]
+
+    def test_near_matches_alone_still_trigger_rendering(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """A Galaxy S25 FE is not an answer to "Galaxy S25".
+
+        Triggering on "no hits at all" would stop here and call the question answered.
+        """
+        searches = {
+            "fast": FakeSearch(
+                "fast", ok("fast", hit("fast", "Galaxy S25 FE", 1.0, ("fe",))), None
+            ),
+            "slow": FakeSearch("slow", unreadable("slow"), ok("slow", hit("slow", "S25", 1.0))),
+        }
+        self.run(monkeypatch, searches, {"slow": "auto"})
+
+        assert searches["slow"].rendered_once
+
+    def test_no_browser_never_renders(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        searches = {"slow": FakeSearch("slow", unreadable("slow"), None)}
+        self.run(monkeypatch, searches, {"slow": "auto"}, allow_browser=False)
+
+        assert not searches["slow"].rendered_once
+
+    def test_an_http_only_store_is_never_rendered(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        searches = {"plain": FakeSearch("plain", unreadable("plain"), None)}
+        self.run(monkeypatch, searches, {"plain": "http"})
+
+        assert not searches["plain"].rendered_once
+
+    def test_a_blocked_store_is_not_re_asked_through_a_browser(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """Re-asking a refusal through a browser is the first step to working around it."""
+        blocked = SearchResult.failure("shy", SearchOutcome.BLOCKED, "403")
+        searches = {"shy": FakeSearch("shy", blocked, ok("shy", hit("shy", "S25", 1.0)))}
+        self.run(monkeypatch, searches, {"shy": "auto"})
+
+        assert not searches["shy"].rendered_once
+
+    def test_one_browser_serves_the_whole_render_pass(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        from product_tracker.services.discovery import discover
+
+        searches = {
+            name: FakeSearch(name, unreadable(name), unreadable(name))
+            for name in ("a", "b", "c")
+        }
+        harness = EscalationHarness(monkeypatch, searches, dict.fromkeys(searches, "auto"))
+        discover("Galaxy S25", self.settings())
+
+        assert harness.sessions == 1
+
+    def test_a_missing_browser_stops_the_pass_rather_than_repeating_the_failure(
+        self, monkeypatch
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Every remaining store would say the same thing; asking each is wasted work."""
+        missing = SearchResult.failure("a", SearchOutcome.NEEDS_BROWSER, "install the extra")
+        searches = {
+            name: FakeSearch(name, unreadable(name), missing) for name in ("a", "b", "c")
+        }
+        found = self.run(monkeypatch, searches, dict.fromkeys(searches, "auto"))
+
+        assert searches["a"].rendered_once
+        assert not searches["c"].rendered_once
+        # But every store still reports the reason, rather than a stale "unreadable".
+        outcomes = {r.store_slug: r.outcome for r in found.unsearchable}
+        assert set(outcomes.values()) == {SearchOutcome.NEEDS_BROWSER}

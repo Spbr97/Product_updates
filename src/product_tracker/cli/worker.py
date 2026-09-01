@@ -14,6 +14,7 @@ from ..repositories.products import ProductRepository
 from ..scheduler.lock import WorkerAlreadyRunningError
 from ..scheduler.runner import WorkerRunner, desired_schedule
 from ..services.check_runner import deliver_pending, run_check
+from ..stores import browser
 from ..stores.registry import default_registry
 from ..utils.money import format_money
 from .formatting import ExitCode, error, info, stdout, success, table, warn
@@ -76,19 +77,26 @@ def check_all(
 
     results = table(f"Checked {len(product_ids)} product(s)", ["Product", "Status", "Price"])
     failures = 0
-    for product_id in product_ids:
-        # Deliver once at the end rather than after each product, so one slow provider
-        # does not stall the whole run.
-        outcome = run_check(
-            product_id, settings=settings, registry=default_registry(), deliver=False
-        )
-        if outcome.status is CheckStatus.FAILED:
-            failures += 1
-        results.add_row(
-            str(product_id),
-            _status_markup(outcome.status),
-            format_money(Decimal(outcome.price) if outcome.price else None, outcome.currency),
-        )
+    # One browser for the whole sweep. Launching Chromium costs about eighteen seconds and
+    # a one-shot render pays it per product, so five browser-rendered products went from
+    # roughly a hundred seconds to under forty. Safe here precisely because this loop is
+    # sequential -- the scheduler's thread pool is why the worker does not do this.
+    with browser.session(headless=settings.playwright_headless):
+        for product_id in product_ids:
+            # Deliver once at the end rather than after each product, so one slow provider
+            # does not stall the whole run.
+            outcome = run_check(
+                product_id, settings=settings, registry=default_registry(), deliver=False
+            )
+            if outcome.status is CheckStatus.FAILED:
+                failures += 1
+            results.add_row(
+                str(product_id),
+                _status_markup(outcome.status),
+                format_money(
+                    Decimal(outcome.price) if outcome.price else None, outcome.currency
+                ),
+            )
 
     stdout.print(results)
     report = deliver_pending(settings)

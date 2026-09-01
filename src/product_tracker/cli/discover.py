@@ -34,6 +34,8 @@ _OUTCOME_TEXT: dict[SearchOutcome, str] = {
     SearchOutcome.TIMEOUT: "timed out",
     SearchOutcome.ERROR: "search failed",
     SearchOutcome.UNSUPPORTED: "no search configured for this store yet",
+    SearchOutcome.NEEDS_BROWSER: "needs a browser to read; install the browser extra",
+    SearchOutcome.DISALLOWED: "their robots.txt asks us not to search; products still tracked",
 }
 
 
@@ -71,11 +73,27 @@ def search(
     store: Annotated[
         str | None, typer.Option("--store", help="Search one store only, by slug.")
     ] = None,
+    browser: Annotated[
+        bool,
+        typer.Option(
+            "--browser/--no-browser",
+            help="Render JavaScript shops when the quick pass finds no exact match.",
+        ),
+    ] = True,
 ) -> None:
-    """Search the supported shops for a product, without tracking anything."""
+    """Search the supported shops for a product, without tracking anything.
+
+    The quick pass takes a couple of seconds. Shops that publish their results only with
+    JavaScript are rendered afterwards, and only if that quick pass came up short, so the
+    common case stays fast. ``--no-browser`` skips rendering entirely.
+    """
     settings = get_settings()
     stores = (store,) if store else None
-    found = discovery.discover(query, settings, store_slugs=stores, limit_per_store=limit)
+    if browser:
+        info("searching... (JavaScript shops are rendered only if this finds nothing)")
+    found = discovery.discover(
+        query, settings, store_slugs=stores, limit_per_store=limit, allow_browser=browser
+    )
 
     if found.hits:
         stdout.print()
@@ -114,11 +132,17 @@ def track(
         bool,
         typer.Option("--include-near", help="Offer near-matches too, for manual confirmation."),
     ] = False,
+    browser: Annotated[
+        bool,
+        typer.Option("--browser/--no-browser", help="Render JavaScript shops if needed."),
+    ] = True,
     user: UserOption = None,
 ) -> None:
     """Find a product across shops and track the listings you confirm."""
     settings = get_settings()
-    found = discovery.discover(query, settings, limit_per_store=limit)
+    found = discovery.discover(
+        query, settings, limit_per_store=limit, allow_browser=browser
+    )
 
     candidates = found.best_per_store(exact_only=not include_near)
     if not candidates:

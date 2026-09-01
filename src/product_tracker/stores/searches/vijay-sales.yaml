@@ -1,16 +1,31 @@
 # Vijay Sales search results.
 #
-# Verified 2026-09-01: /search?q= returns 200 but the results grid is client-rendered, so
-# a plain fetch finds nothing. Kept, rather than deleted, so the store is named in the
-# "could not answer" list instead of silently missing -- and so that when the selectors
-# below are filled in, nothing else has to change.
+# NOT WORKING, and kept deliberately. Investigated 2026-09-01:
 #
-# The card and field selectors are unverified. Search reports PAGE_STRUCTURE rather than
-# "no such product", which is the honest answer for a page we cannot read.
+#   * /search?q= returns HTTP 200 over plain HTTP, with a "loaderWrapper" and no results.
+#   * Rendered in Chromium, waited to network-idle plus four seconds: the page contains
+#     zero occurrences of the searched term, and the only product links on it are a
+#     featured block -- a search for "Galaxy S25" returns beard trimmers.
+#
+# So the results are not in the rendered DOM at all. They arrive by a later request into a
+# component, or the search is a client-side route that needs typing rather than a URL.
+# Finding the right route is the remaining work; the selectors below are a guess and are
+# marked as such.
+#
+# It stays configured rather than deleted so the shop is named in the "could not answer"
+# list instead of silently missing, and because if the route is found this file is the only
+# thing that changes.
 
 url: "https://www.vijaysales.com/search?q={query}"
 
 product_url_pattern: "/p/[0-9]"
+
+# auto: try HTTP first, render only when that found nothing and nothing else matched.
+render: auto
+
+# Waiting for this is what makes the render worth attempting -- and its absence is what
+# currently makes the attempt fail honestly rather than return the featured block.
+wait_for: "div.product-card"
 
 result_card: "div.product-card"
 

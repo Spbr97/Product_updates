@@ -259,3 +259,80 @@ class TestConfigValidation:
         finally:
             search_module.SEARCH_DIR = original
             load_search_config.cache_clear()
+
+
+class TestRenderMode:
+    def test_stores_default_to_http(self) -> None:
+        """Adding rendering must not quietly change what existing shops do."""
+        for slug in ("amazon-in", "flipkart"):
+            config = load_search_config(slug)
+            assert config.render == "http"
+            assert not config.may_render
+
+    def test_an_auto_store_may_render(self) -> None:
+        assert load_search_config("vijay-sales").may_render
+
+    def test_an_unknown_render_mode_is_refused(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        import product_tracker.stores.search as search_module
+        from product_tracker.domain.errors import ConfigurationError
+
+        (tmp_path / "bogus.yaml").write_text(
+            'url: "https://x.example/s?q={query}"\n'
+            'product_url_pattern: "/p/"\n'
+            'render: "sometimes"\n',
+            encoding="utf-8",
+        )
+        original = search_module.SEARCH_DIR
+        search_module.SEARCH_DIR = tmp_path
+        try:
+            load_search_config.cache_clear()
+            with pytest.raises(ConfigurationError, match="sometimes"):
+                load_search_config("bogus")
+        finally:
+            search_module.SEARCH_DIR = original
+            load_search_config.cache_clear()
+
+    def test_a_missing_browser_is_reported_as_such(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """Not as "no results".
+
+        The default image is lean on purpose, so this state is normal. Telling someone
+        their shop returned nothing, when the truth is that their deployment has no
+        browser, sends them to debug the wrong thing entirely.
+        """
+        import sys
+
+        from product_tracker.domain.models import FetchContext
+
+        monkeypatch.setitem(sys.modules, "playwright.sync_api", None)
+        result = ConfiguredSearch("vijay-sales").search(
+            "Galaxy S25", FetchContext(verify_public_host=False), use_browser=True
+        )
+
+        assert result.outcome is SearchOutcome.NEEDS_BROWSER
+        assert "browser extra" in (result.message or "")
+
+    def test_an_http_store_ignores_a_request_to_render(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """`use_browser` is a permission from the caller, not an override of the config."""
+        import product_tracker.stores.search as search_module
+        from product_tracker.domain.models import FetchContext
+
+        rendered: list[str] = []
+        monkeypatch.setattr(
+            search_module.browser_module,
+            "render",
+            lambda url, ctx, **kw: rendered.append(url),  # type: ignore[arg-type,return-value]
+        )
+        monkeypatch.setattr(
+            search_module,
+            "http_fetch",
+            lambda url, ctx: FetchSuccess(
+                html=load("amazon_search.html"), url=url, http_status=200
+            ),
+        )
+
+        result = ConfiguredSearch("amazon-in").search(
+            "Galaxy S25", FetchContext(verify_public_host=False), use_browser=True
+        )
+
+        assert rendered == []
+        assert result.succeeded
