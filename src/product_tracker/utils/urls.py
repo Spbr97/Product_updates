@@ -45,11 +45,26 @@ TRACKING_PARAMS: frozenset[str] = frozenset(
         # Amazon / general referrer breadcrumbs.
         "ref_", "refid", "pf_rd_p", "pf_rd_r", "pf_rd_s", "pf_rd_t", "pf_rd_i",
         "pd_rd_w", "pd_rd_r", "pd_rd_wg", "content-id", "smid",
+        # Amazon product-ads breadcrumbs, as they arrive from a Google Shopping click.
+        # Listed one by one rather than by an "hv" prefix: a prefix that broad could
+        # swallow a real parameter, and identity-bearing keys are exactly what must not
+        # be stripped. NOTE: `th` and `psc` are NOT here -- they select a variation.
+        "hvadid", "hvpos", "hvnetw", "hvrand", "hvpone", "hvptwo", "hvqmt", "hvdev",
+        "hvdvcmdl", "hvlocint", "hvlocphy", "hvtargid", "hvocijid", "hvexpln", "mcid",
+        # Campaign identifiers that survive a paid click.
+        "cid", "srsltid",
+        # Flipkart. `hl_lid` is another impression id; `pageUID` is a millisecond
+        # timestamp, so without it the same listing shared twice canonicalises to two
+        # different URLs and gets tracked as two products -- the exact duplication that
+        # url_canonical exists to prevent.
+        "hl_lid", "pageuid",
     }
 )
 
 #: Any parameter starting with one of these is treated as tracking.
-TRACKING_PREFIXES: tuple[str, ...] = ("utm_",)
+#: ``gad_`` covers Google Ads' expanding set (gad_source, gad_campaignid, ...), which is
+#: attached to every paid click and never identifies a product.
+TRACKING_PREFIXES: tuple[str, ...] = ("utm_", "gad_")
 
 
 def _is_tracking_param(name: str) -> bool:

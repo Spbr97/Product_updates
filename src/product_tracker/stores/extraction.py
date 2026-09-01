@@ -240,33 +240,68 @@ def from_meta_tags(html: str, base_url: str) -> ProductData | None:
     return data
 
 
+#: How far up from the heading to look for its price. Enough to leave a product summary
+#: block, not enough to reach the rest of the page.
+_PRICE_SCOPE_DEPTH = 4
+
+
+def _sole_heading(soup: BeautifulSoup) -> Any:
+    """The page's one product heading, or None when that cannot be established.
+
+    A page with several distinct ``h1`` texts does not tell us which one is the product.
+    A real Amazon listing has nine, starting with two "Add to your order" cross-sell
+    widgets, and taking the first produced a confident, entirely wrong answer: the widget's
+    title paired with a price from somewhere else on the page.
+
+    There is no generic signal that separates a product title from a widget title -- the
+    longest, the first, the one nearest a price, all pick the wrong node on some real page.
+    So when it is ambiguous this gives up, the adapter reports PAGE_STRUCTURE, and the
+    honest answer is that this page needs a store adapter of its own.
+    """
+    headings = soup.find_all("h1")
+    if not headings:
+        return None
+    distinct = {h.get_text(" ", strip=True) for h in headings}
+    distinct.discard("")
+    if len(distinct) != 1:
+        return None
+    return headings[0]
+
+
 def from_labelled_text(html: str, base_url: str) -> ProductData | None:
     """Last resort: a heading plus a price that is explicitly labelled as one.
 
-    Only labelled prices are accepted. Grabbing the first currency-looking number on a
-    page reliably picks up EMI instalments, delivery charges, or "customers also bought"
-    tiles.
+    Two restrictions, both learned from real pages. Only *labelled* prices count, because
+    the first currency-looking number on a page is reliably an EMI instalment, a delivery
+    charge, or a "customers also bought" tile. And the price must sit near the heading:
+    searching the whole document let the name and the price come from unrelated parts of a
+    two-megabyte page, which is how a phone listing came back titled "Add to your order".
     """
     soup = BeautifulSoup(html, "html.parser")
-    heading = soup.find("h1")
+    heading = _sole_heading(soup)
     if heading is None:
         return None
 
-    match = _LABELLED_PRICE.search(soup.get_text(" ", strip=True))
-    if match is None:
-        return None
-
-    price = parse_price(match.group(1))
-    if price is None:
-        return None
-
-    data = ProductData()
-    data.name = heading.get_text(" ", strip=True) or None
-    data.price = price
-    data.currency = None
-    data.availability = Availability.UNKNOWN
-    data.raw = {"source": "labelled-text"}
-    return data
+    # Widen from the heading outwards, stopping at the first scope that holds a price.
+    scope: Any = heading
+    for _ in range(_PRICE_SCOPE_DEPTH):
+        parent = getattr(scope, "parent", None)
+        if parent is None:
+            break
+        scope = parent
+        match = _LABELLED_PRICE.search(scope.get_text(" ", strip=True))
+        if match is not None:
+            price = parse_price(match.group(1))
+            if price is None:
+                return None
+            data = ProductData()
+            data.name = heading.get_text(" ", strip=True) or None
+            data.price = price
+            data.currency = None
+            data.availability = Availability.UNKNOWN
+            data.raw = {"source": "labelled-text"}
+            return data
+    return None
 
 
 STRATEGIES = (from_json_ld, from_meta_tags, from_labelled_text)

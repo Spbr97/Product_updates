@@ -214,3 +214,64 @@ class TestRedactUrls:
     @pytest.mark.parametrize("scheme", ["http", "https", "HTTPS"])
     def test_both_schemes_and_any_case(self, scheme: str) -> None:
         assert "SECRET" not in redact_urls(f"{scheme}://shop.test/p?token=SECRET")
+
+
+class TestPaidClickUrls:
+    """Canonicalisation against URLs as they actually arrive from a shopping ad.
+
+    Every one of these is a real URL a person pasted in. They are the hard case for
+    duplicate detection: the same listing reached through two ads differs in a dozen
+    parameters, and ``url_canonical`` is the only thing standing between that and the same
+    product being tracked twice.
+    """
+
+    def test_a_flipkart_page_uid_does_not_defeat_deduplication(self) -> None:
+        """``pageUID`` is a millisecond timestamp, so it differs on every single visit.
+
+        Left in, the same listing shared twice canonicalises to two different URLs and is
+        tracked as two products, each fetched separately from Flipkart.
+        """
+        base = "https://www.flipkart.com/samsung-galaxy-s25-5g-navy-256-gb/p/itm277a7d18"
+        first = canonicalize_url(f"{base}?pid=MOBH8K8U4ZPHSNKK&pageUID=1788269621508")
+        second = canonicalize_url(f"{base}?pid=MOBH8K8U4ZPHSNKK&pageUID=1788269999999")
+
+        assert first == second
+
+    def test_flipkart_keeps_the_variant_id(self) -> None:
+        """``pid`` selects the colour and capacity; stripping it would merge variants."""
+        canonical = canonicalize_url(
+            "https://www.flipkart.com/samsung-galaxy-s25-5g-navy-256-gb/p/itm277a7d18"
+            "?pid=MOBH8K8U4ZPHSNKK&marketplace=FLIPKART&lid=LSTMOB&hl_lid=LSTX"
+        )
+        assert "pid=MOBH8K8U4ZPHSNKK" in canonical
+        for stripped in ("marketplace", "lid", "hl_lid"):
+            assert stripped not in canonical
+
+    def test_google_ads_parameters_are_stripped(self) -> None:
+        canonical = canonicalize_url(
+            "https://www.vijaysales.com/p/P237290/237327/samsung-galaxy-s25-navy"
+            "?utm_source=google&utm_medium=cpc&gad_source=1&gad_campaignid=23251475503"
+            "&gbraid=0AAAAADLKtlk&gclid=Cj0KCQjw79nUBhCgARIsADSHka1WNb8"
+        )
+        assert canonical == (
+            "https://www.vijaysales.com/p/P237290/237327/samsung-galaxy-s25-navy"
+        )
+
+    def test_amazon_ad_breadcrumbs_are_stripped_but_the_variation_is_kept(self) -> None:
+        """``th`` selects a variation, so it stays; the hv* breadcrumbs do not."""
+        canonical = canonicalize_url(
+            "https://www.amazon.in/Samsung-Snapdragon/dp/B0H3FN92VB"
+            "?mcid=28684655bf&tag=googleshopdes-21&linkCode=df0&hvadid=709962856229"
+            "&hvpos=&hvnetw=g&hvtargid=pla-2494605164839&gad_source=1&th=1"
+        )
+        assert canonical.endswith("?th=1")
+        for stripped in ("mcid", "tag", "linkCode", "hvadid", "hvnetw", "gad_source"):
+            assert stripped not in canonical
+
+    def test_a_campaign_id_is_stripped_but_a_model_code_is_kept(self) -> None:
+        canonical = canonicalize_url(
+            "https://www.samsung.com/in/smartphones/galaxy-s25/buy/"
+            "?modelCodeSM-S931BLBC&cid=in_pd_pmax_google&gad_source=1&gclid=Cj0KCQ"
+        )
+        assert "modelCodeSM-S931BLBC" in canonical
+        assert "cid=" not in canonical

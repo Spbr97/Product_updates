@@ -161,7 +161,9 @@ def _legend(matrix: ComparisonMatrix) -> None:
         if status in used:
             stdout.print(f"  [dim]{label:<9} {_LEGEND[status]}[/dim]")
     if any(cell.is_stale for row in matrix.rows for cell in row.cells.values()):
-        stdout.print("  [dim]*         not checked recently[/dim]")
+        stdout.print(
+            "  [dim]*         last price we saw; the latest check did not confirm it[/dim]"
+        )
 
 
 def compare(

@@ -176,17 +176,26 @@ def cell_for_product(
     moment = now or datetime.now(UTC)
     status_value, error_type = last_check or (None, None)
 
+    status = _classify(product, status_value, error_type)
+    aged = (
+        product.last_checked_at is not None and (moment - product.last_checked_at) > stale_after
+    )
+    # A price whose most recent check did not read one is the *last* price we saw, not a
+    # price we just confirmed. Age alone would call it fresh: the check ran a minute ago,
+    # it simply came back without a price. Showing that as a confident current figure is
+    # the same class of overclaim as calling a failed extraction "out of stock".
+    unconfirmed = status is CellStatus.OK and not (
+        status_value == CheckStatus.SUCCESS.value and error_type is None
+    )
+
     return ComparisonCell(
-        status=_classify(product, status_value, error_type),
+        status=status,
         price=product.current_price,
         currency=product.currency,
         availability=product.availability,
         product_id=product.id,
         url=product.url,
         last_checked_at=product.last_checked_at,
-        is_stale=(
-            product.last_checked_at is not None
-            and (moment - product.last_checked_at) > stale_after
-        ),
+        is_stale=aged or unconfirmed,
         previous_price=previous_price,
     )

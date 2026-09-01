@@ -126,10 +126,14 @@ class TestOrdinaryReadings:
         assert cell.status is CellStatus.NEVER_CHECKED
 
 
+SUCCEEDED = (CheckStatus.SUCCESS.value, None)
+
+
 class TestStaleness:
-    def test_a_recent_check_is_not_stale(self) -> None:
+    def test_a_recent_confirmed_check_is_not_stale(self) -> None:
         cell = cell_for_product(
             make_product(checked=NOW - timedelta(hours=1)),
+            last_check=SUCCEEDED,
             stale_after=timedelta(hours=6),
             now=NOW,
         )
@@ -138,12 +142,34 @@ class TestStaleness:
     def test_an_old_check_is_flagged(self) -> None:
         cell = cell_for_product(
             make_product(checked=NOW - timedelta(days=2)),
+            last_check=SUCCEEDED,
             stale_after=timedelta(hours=6),
             now=NOW,
         )
         assert cell.is_stale
         # Still a real price -- stale is a caveat, not a failure.
         assert cell.status is CellStatus.OK
+
+    def test_a_price_the_latest_check_could_not_confirm_is_flagged(self) -> None:
+        """A price read last week, whose check a minute ago came back without one.
+
+        By age it is fresh, and showing it as a confident current figure is the same class
+        of overclaim as calling a failed extraction "out of stock". This is the real case
+        that produced it: an Amazon listing kept displaying a price from a mis-extraction
+        after the checker had stopped being able to read one.
+        """
+        cell = cell_for_product(
+            make_product(checked=NOW - timedelta(minutes=1)),
+            last_check=(CheckStatus.PARTIAL.value, FetchOutcome.PRICE_NOT_FOUND.value),
+            stale_after=timedelta(hours=6),
+            now=NOW,
+        )
+        assert cell.status is CellStatus.OK
+        assert cell.is_stale
+
+    def test_an_unchecked_price_is_not_presented_as_confirmed(self) -> None:
+        cell = cell_for_product(make_product(), stale_after=timedelta(hours=6), now=NOW)
+        assert cell.is_stale
 
 
 class TestPriceMovement:
