@@ -31,6 +31,7 @@ from bs4 import BeautifulSoup
 
 from ..core.logging import get_logger
 from ..domain.enums import FetchOutcome, SearchOutcome
+from ..domain.errors import ConfigurationError
 from ..domain.models import FetchContext, SearchHit, SearchResult
 from ..utils.money import parse_price
 from ..utils.urls import host_of
@@ -135,10 +136,42 @@ def _as_tuple(value: object) -> tuple[str, ...]:
     return (str(value),)
 
 
+#: Every key a search description may contain. Anything else is a mistake.
+_KNOWN_KEYS = frozenset(
+    {
+        "url",
+        "product_url_pattern",
+        "result_card",
+        "result_link",
+        "title",
+        "brand",
+        "price",
+        "image",
+        "notes",
+    }
+)
+
+
 @cache
 def load_search_config(slug: str) -> SearchConfig:
     path = SEARCH_DIR / f"{slug}.yaml"
     raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+    # A key that is not recognised is silently ignored by a plain .get(), and the result is
+    # a search that runs, returns almost nothing, and blames the store. That happened here:
+    # renaming "result_container" to "result_card" left two stores carrying the old key, so
+    # they parsed the entire page as one result and could never return more than one hit.
+    # Failing loudly at load time costs a startup error and saves that whole diagnosis.
+    unknown = sorted(set(raw) - _KNOWN_KEYS)
+    if unknown:
+        raise ConfigurationError(
+            f"{path.name} has unknown key(s): {', '.join(unknown)}. "
+            f"Known keys are: {', '.join(sorted(_KNOWN_KEYS))}"
+        )
+    for required in ("url", "product_url_pattern"):
+        if not raw.get(required):
+            raise ConfigurationError(f"{path.name} is missing required key {required!r}")
+
     return SearchConfig(
         url_template=str(raw["url"]),
         result_link=_as_tuple(raw.get("result_link")),
@@ -260,11 +293,21 @@ class ConfiguredSearch(StoreSearch):
     def _link(
         self, card: Any, config: SearchConfig, pattern: re.Pattern[str], base_url: str
     ) -> str | None:
+        """The product URL for this result.
+
+        The card itself is checked before its descendants. On Flipkart the result block *is*
+        the product link -- anchoring on the href shape rather than a rotating class name --
+        and ``select`` only ever looks at descendants, so a card that is its own link finds
+        nothing and every result is skipped.
+        """
+        candidates = [card] if card.has_attr("href") else []
         for selector in config.result_link or ("a[href]",):
-            for anchor in card.select(selector):
-                href = str(anchor.get("href") or "")
-                if href and pattern.search(href):
-                    return urljoin(base_url, href)
+            candidates.extend(card.select(selector))
+
+        for anchor in candidates:
+            href = str(anchor.get("href") or "")
+            if href and pattern.search(href):
+                return urljoin(base_url, href)
         return None
 
     def _full_title(self, card: Any, config: SearchConfig) -> str | None:

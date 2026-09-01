@@ -182,3 +182,80 @@ class TestConfiguration:
 
     def test_a_configured_store_returns_a_search(self) -> None:
         assert search_for("amazon-in") is not None
+
+
+class TestFlipkartParsing:
+    """Flipkart's results, whose block is the product link itself."""
+
+    @staticmethod
+    def parse(query: str = "Galaxy S25", limit: int = 10) -> tuple[SearchHit, ...]:
+        search = ConfiguredSearch("flipkart")
+        response = FetchSuccess(
+            html=load("flipkart_search.html"),
+            url="https://www.flipkart.com/search?q=Galaxy+S25",
+            http_status=200,
+        )
+        return search._parse(response, load_search_config("flipkart"), query, limit=limit)
+
+    def test_a_card_that_is_its_own_link_is_found(self) -> None:
+        """Regression: ``select`` only looks at descendants.
+
+        Flipkart's config anchors the result block on the href shape, because its class
+        names rotate. That makes the card and the link the same element, and looking only
+        inside it found no link at all -- every result silently skipped, the store blamed
+        for returning nothing.
+        """
+        assert len(self.parse()) == 3
+
+    def test_reads_titles_and_selling_prices(self) -> None:
+        best = self.parse()[0]
+        assert best.title == "Samsung Galaxy S25 5G (Silver Shadow, 256 GB)"
+        assert best.price == Decimal("79999")
+
+    def test_an_exchange_offer_is_never_taken_as_the_price(self) -> None:
+        """The nastiest trap on the page.
+
+        "Upto Rs 54,400 Off on Exchange" is *lower* than the Rs 79,999 price, so picking it
+        up does not look like a bug -- it looks like a deal, and it would be recorded in
+        price history as one.
+        """
+        for hit in self.parse():
+            assert hit.price != Decimal("54400")
+
+    def test_navigation_links_are_not_products(self) -> None:
+        for hit in self.parse():
+            assert "/p/itm" in hit.url
+
+    def test_a_different_model_is_flagged(self) -> None:
+        hits = {hit.title: hit for hit in self.parse()}
+        fe = next(hit for title, hit in hits.items() if " FE " in title)
+        assert fe.qualifiers == ("fe",)
+        assert not fe.is_exact
+
+
+class TestConfigValidation:
+    def test_an_unknown_key_is_refused(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """Silently ignoring a key is how two stores kept a renamed one and broke.
+
+        They carried "result_container" after it became "result_card", parsed the whole
+        page as a single result, and could never return more than one hit -- while looking
+        like the stores were at fault.
+        """
+        import product_tracker.stores.search as search_module
+        from product_tracker.domain.errors import ConfigurationError
+
+        (tmp_path / "bogus.yaml").write_text(
+            'url: "https://x.example/s?q={query}"\n'
+            'product_url_pattern: "/p/"\n'
+            'result_container: "div"\n',
+            encoding="utf-8",
+        )
+        original = search_module.SEARCH_DIR
+        search_module.SEARCH_DIR = tmp_path
+        try:
+            load_search_config.cache_clear()
+            with pytest.raises(ConfigurationError, match="result_container"):
+                load_search_config("bogus")
+        finally:
+            search_module.SEARCH_DIR = original
+            load_search_config.cache_clear()

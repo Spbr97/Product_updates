@@ -1,27 +1,34 @@
 # Flipkart search results.
 #
-# Verified 2026-09-01: the results page is served over plain HTTP with product links in
-# the markup, unlike Flipkart product pages, which are largely client-rendered.
+# The result block is the product link itself, not a container class. Flipkart's class
+# names are obfuscated and rotate -- every selector guessed for this file from an earlier
+# page had already stopped matching by the next day -- whereas "an anchor whose href
+# contains /p/itm" is the URL shape and does not move.
+#
+# When extraction starts failing, update the class names below. No Python change needed.
 
 url: "https://www.flipkart.com/search?q={query}"
 
-# Product URLs are /<slug>/p/itm<id>. Anchored on "/p/itm" so category, banner and
-# navigation links cannot be mistaken for products.
 product_url_pattern: "/p/itm"
+
+# The anchor wraps the whole result, title and price included.
+result_card: "a[href*='/p/itm']"
 
 result_link:
   - "a[href*='/p/itm']"
 
-# Flipkart puts the product name in the anchor's title attribute on grid results, and in
-# a child span on list results.
+# Verified 2026-09-01. Older generations kept below: a selector that no longer matches
+# costs nothing, a missing one costs a broken search.
 title:
+  - "div.RG5Slk"
   - "div.KzDlHZ"
   - "a.wjcEIp"
   - "div._4rR01T"
-  - "span.VU-ZEz"
 
+# ONLY the selling price. A Flipkart card also carries "Upto Rs 54,400 Off on Exchange"
+# in div.HZ0E6r -- a number *lower* than the price, so a wrong selector here does not look
+# wrong, it looks like a bargain. That class is deliberately absent and must stay absent.
 price:
+  - "div.hZ3P6w"
   - "div.Nx9bqj"
   - "div._30jeq3"
-
-result_container: "div"
