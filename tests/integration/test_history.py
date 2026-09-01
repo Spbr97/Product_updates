@@ -383,3 +383,69 @@ class TestSchemaGuards:
                 )
             )
             db_session.flush()
+
+
+class TestRecentChange:
+    """Two notions of change: since the first observation, and since the previous one.
+
+    Reporting only the first was technically right and conversationally wrong -- someone
+    asking "what just happened" wants the latter.
+    """
+
+    def test_reports_the_most_recent_move(
+        self, db_session: Session, product_id: int
+    ) -> None:
+        seed(db_session, product_id, ("100", 0), ("120", 1), ("90", 2))
+
+        stats = PriceHistoryRepository(db_session).stats(product_id)
+
+        assert stats is not None
+        assert stats.previous == Decimal("120")
+        assert stats.changed_from_previous == Decimal("-30")
+        assert stats.changed_pct_from_previous == Decimal("-25.00")
+
+    def test_differs_from_the_change_since_first(
+        self, db_session: Session, product_id: int
+    ) -> None:
+        """Up overall, down just now -- the two must not be conflated."""
+        seed(db_session, product_id, ("100", 0), ("150", 1), ("120", 2))
+
+        stats = PriceHistoryRepository(db_session).stats(product_id)
+
+        assert stats is not None
+        assert stats.changed_by == Decimal("20")  # since first
+        assert stats.changed_from_previous == Decimal("-30")  # since previous
+
+    def test_a_single_observation_has_no_previous(
+        self, db_session: Session, product_id: int
+    ) -> None:
+        seed(db_session, product_id, ("100", 0))
+
+        stats = PriceHistoryRepository(db_session).stats(product_id)
+
+        assert stats is not None
+        assert stats.previous is None
+        assert stats.changed_from_previous is None
+        assert stats.changed_pct_from_previous is None
+
+    def test_records_when_the_previous_price_was_seen(
+        self, db_session: Session, product_id: int
+    ) -> None:
+        seed(db_session, product_id, ("100", 0), ("90", 5))
+
+        stats = PriceHistoryRepository(db_session).stats(product_id)
+
+        assert stats is not None
+        assert stats.previous_observed_at == BASE
+
+    def test_only_considers_the_current_currency(
+        self, db_session: Session, product_id: int
+    ) -> None:
+        seed(db_session, product_id, ("1000", 0), currency="INR")
+        seed(db_session, product_id, ("20", 1), ("30", 2), currency="USD")
+
+        stats = PriceHistoryRepository(db_session).stats(product_id)
+
+        assert stats is not None
+        assert stats.currency == "USD"
+        assert stats.previous == Decimal("20")

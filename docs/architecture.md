@@ -88,10 +88,24 @@ migration. Adding a condition touches two files and nothing else.
 
 ### Notifications are recorded, then delivered
 
-Two steps on purpose. The row exists — guarded by a unique `dedupe_key` — before anything
-is sent, so a crash between deciding and sending leaves a pending row rather than a silent
-loss. `INSERT … ON CONFLICT DO NOTHING` means the *database* enforces single delivery, not
-a check-then-insert that a race could slip between.
+Two steps, in **two transactions**. The row exists — guarded by a unique `dedupe_key` —
+and is committed before anything is sent, so a crash between deciding and sending leaves a
+pending row rather than a silent loss. `INSERT … ON CONFLICT DO NOTHING` means the
+*database* enforces single delivery, not a check-then-insert that a race could slip between.
+
+Delivery runs in its own transaction (`services/check_runner.py`) because it talks to SMTP
+servers and webhooks: holding the check's transaction across that would pin a connection
+for as long as the slowest provider takes.
+
+### Worker liveness is measured, not inferred
+
+The worker upserts a heartbeat row on every reconcile and deletes it on clean shutdown, so
+any process can read a direct answer to "is a worker running?". Inferring it from overdue
+jobs — the earlier approach — could not tell "nothing is running" from "a worker is running
+but wedged mid-check", and cried wolf whenever a check legitimately ran long.
+
+Two workers appear as two rows, and `status` warns: they have no cross-process locking, so
+every job would run twice.
 
 ### Scheduling hides behind an interface
 
@@ -134,7 +148,7 @@ and a misbehaving rule or an unreachable provider is logged and recorded, not ra
   feature that needs them.
 - **Celery/Redis.** APScheduler with a Postgres job store covers one worker; `JobQueue`
   makes the swap cheap when it is actually needed.
-- **A heartbeat.** Worker liveness is *inferred* from overdue jobs, and reported as an
-  inference.
+- **A shared rate limit.** The API's limiter is per-process and in-memory; two API
+  processes each enforce their own. A shared ceiling needs Redis.
 - **Anti-bot evasion.** Blocks are recorded and respected. No CAPTCHA solving, no
   fingerprint spoofing, no credential use.

@@ -21,6 +21,7 @@ from ..db.session import get_engine
 from .deps import RequireRead
 from .errors import register_exception_handlers
 from .middleware import BodySizeLimitMiddleware
+from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
 from .schemas.common import ErrorResponse
 
 log = get_logger(__name__)
@@ -80,6 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         responses={
             401: {"model": ErrorResponse, "description": "Missing or invalid API key"},
             413: {"model": ErrorResponse, "description": "Request body too large"},
+            429: {"model": ErrorResponse, "description": "Rate limit exceeded"},
             422: {"model": ErrorResponse, "description": "Validation error"},
             500: {"model": ErrorResponse, "description": "Internal error"},
         },
@@ -91,6 +93,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # large body is either a mistake or an attempt to exhaust memory.
     app.add_middleware(
         BodySizeLimitMiddleware, max_bytes=settings.api_max_request_bytes
+    )
+    # Outermost, so a flood is rejected before anything else does work for it.
+    app.add_middleware(
+        RateLimitMiddleware,
+        limiter=TokenBucketLimiter(
+            rate_per_minute=settings.api_rate_limit_per_minute,
+            burst=settings.api_rate_limit_burst,
+        ),
     )
 
     from .routers import health  # Imported here to keep module import side-effect free.

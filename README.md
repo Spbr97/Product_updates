@@ -30,7 +30,8 @@ adding a module, not editing the tracking engine.
 - **Configurable alerts.** Rules ("price dropped", "below ₹69,999", "back in stock") are
   rows, not code branches. Six conditions ship; adding one is an evaluator function.
   Notifications are deduplicated by a unique key in the database, so the same alert reaches
-  you once however many times it is observed or retried.
+  you once however many times it is observed or retried. Recording and delivery are separate
+  transactions, so a slow provider never holds a check open.
 - **Runs itself.** A worker process checks products on a per-product interval, retries
   transient failures, throttles requests per store, and records every attempt.
 - **Two interfaces.** A Typer CLI for humans and a versioned FastAPI for a future web or
@@ -173,6 +174,8 @@ most:
 | `API_KEY` | *(unset)* | If set, required as `X-API-Key` on mutating endpoints. Unset means the API is open — fine on localhost, not in public. |
 | `API_ALLOW_ANONYMOUS_READS` | `true` | Set `false` to require the key on `GET` too. |
 | `API_MAX_REQUEST_BYTES` | `64000` | Bodies over this are rejected with 413. |
+| `API_RATE_LIMIT_PER_MINUTE` / `API_RATE_LIMIT_BURST` | `60` / `20` | State-changing requests per client. Reads and health probes are exempt. |
+| `NOTIFICATION_DEDUPE_WINDOW_SECONDS` | `86400` | How long the same alert is suppressed. Shorten for volatile prices. |
 | `BLOCK_PRIVATE_ADDRESSES` | `true` | SSRF guard. Rejects URLs resolving to private/loopback ranges. |
 | `NOTIFY_DEFAULT_PROVIDERS` | `console` | Comma-separated provider slugs. |
 
@@ -415,8 +418,10 @@ docker build -f docker/Dockerfile `
 | Readiness hangs | Should not happen: `DB_CONNECT_TIMEOUT_SECONDS` (default 5) bounds connection attempts. |
 | `401` from the API | `API_KEY` is set; send `X-API-Key`. The 401's `WWW-Authenticate` header names it. |
 | `413` from the API | Body over `API_MAX_REQUEST_BYTES` (default 64 KB). |
-| `status` says the worker is not running | It infers this from overdue jobs in the job store. Start it: `product-tracker worker`. |
+| `status` says the worker is not running | Read from the heartbeat table, which the worker touches every reconcile. Start it: `product-tracker worker`. |
 | The worker never checks a product added while it was running | Reconcile runs every `RECONCILE_INTERVAL_SECONDS` (default 60). Wait one interval, or restart the worker. |
+| `429` from the API | Rate limit. Defaults to 60 state-changing requests/min with a burst of 20; `Retry-After` says how long to wait. |
+| `status` says two workers are reporting | Two workers are running against one database, so every job runs twice. Stop one. |
 | A check is recorded as `skipped` | The store's circuit breaker is open after repeated failures. It half-opens after `STORE_CIRCUIT_RESET_SECONDS`. `error_detail` says how long is left. |
 | Every job runs twice | Two workers are running against one database. Only run one. |
 | An alert fired once and then went quiet | Deduplication. The same alert is delivered once per day; a further price move alerts again. Check `product-tracker alerts history <ID>`. |

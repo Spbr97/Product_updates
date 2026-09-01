@@ -62,4 +62,14 @@ class PriceStatsResponse(BaseModel):
     changed_pct: Decimal | None = Field(
         default=None, description="That change as a percentage of the first recorded price."
     )
+    previous: Decimal | None = Field(
+        default=None, description="The price recorded before the current one."
+    )
+    previous_observed_at: datetime | None = None
+    changed_from_previous: Decimal | None = Field(
+        default=None, description="Current price minus the previous recorded price."
+    )
+    changed_pct_from_previous: Decimal | None = Field(
+        default=None, description="That change as a percentage of the previous price."
+    )
     mixed_currency: bool = False

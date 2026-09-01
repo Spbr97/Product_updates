@@ -118,6 +118,17 @@ class PriceHistoryRepository(Repository[PriceHistory]):
                 # Quantised to two places: a price series does not support more.
                 changed_pct = (changed_by / first_price * 100).quantize(Decimal("0.01"))
 
+        # The move that just happened, as distinct from the move since tracking began.
+        previous_row = self._previous(product_id, currency, newest.id)
+        previous = previous_row.price if previous_row else None
+        changed_from_previous = changed_pct_from_previous = None
+        if previous is not None:
+            changed_from_previous = current - previous
+            if previous != 0:
+                changed_pct_from_previous = (
+                    changed_from_previous / previous * 100
+                ).quantize(Decimal("0.01"))
+
         return PriceStats(
             currency=currency,
             observations=int(observations),
@@ -131,8 +142,28 @@ class PriceHistoryRepository(Repository[PriceHistory]):
             first_observed_at=first_at,
             changed_by=changed_by,
             changed_pct=changed_pct,
+            previous=previous,
+            previous_observed_at=previous_row.observed_at if previous_row else None,
+            changed_from_previous=changed_from_previous,
+            changed_pct_from_previous=changed_pct_from_previous,
             mixed_currency=len(all_currencies) > 1,
         )
+
+    def _previous(
+        self, product_id: int, currency: str, newest_id: int
+    ) -> PriceHistory | None:
+        """The observation before the most recent one, in the same currency."""
+        stmt = (
+            select(PriceHistory)
+            .where(
+                PriceHistory.product_id == product_id,
+                PriceHistory.currency == currency,
+                PriceHistory.id != newest_id,
+            )
+            .order_by(desc(PriceHistory.observed_at), desc(PriceHistory.id))
+            .limit(1)
+        )
+        return self.session.execute(stmt).scalars().first()
 
     def _price_at_extreme(
         self, product_id: int, currency: str, *, oldest: bool

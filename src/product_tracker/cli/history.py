@@ -109,11 +109,19 @@ def _render_stats(stats: PriceStats | None, product_id: int) -> None:
     listing.add_row("average", format_money(stats.average, stats.currency))
     listing.add_row("first observed", _at(stats.first_observed_at).strip(" ()") or "-")
     listing.add_row(
-        "change since first",
-        _delta(stats.current, _first_price(stats), stats.currency),
+        "last change",
+        _delta(stats.current, stats.previous, stats.currency)
+        + (
+            f"  ({stats.changed_pct_from_previous:+.2f}%)"
+            if stats.changed_pct_from_previous is not None
+            else ""
+        ),
     )
-    if stats.changed_pct is not None:
-        listing.add_row("change %", f"{stats.changed_pct:+.2f}%")
+    listing.add_row(
+        "since first",
+        _delta(stats.current, _first_price(stats), stats.currency)
+        + (f"  ({stats.changed_pct:+.2f}%)" if stats.changed_pct is not None else ""),
+    )
     stdout.print(listing)
 
     if stats.mixed_currency:

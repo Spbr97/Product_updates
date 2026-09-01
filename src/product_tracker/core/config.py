@@ -97,6 +97,21 @@ class Settings(BaseSettings):
     api_allow_anonymous_reads: bool = True
     api_max_page_size: int = Field(default=100, ge=1, le=1000)
     api_default_page_size: int = Field(default=20, ge=1, le=1000)
+    api_rate_limit_per_minute: int = Field(
+        default=60,
+        ge=1,
+        le=10_000,
+        description=(
+            "State-changing requests per client per minute. Guards against a script "
+            "looping on /check and driving unbounded outbound traffic to real shops."
+        ),
+    )
+    api_rate_limit_burst: int = Field(
+        default=20,
+        ge=1,
+        le=10_000,
+        description="Requests allowed in a burst before the sustained rate applies.",
+    )
     api_max_request_bytes: int = Field(
         default=64_000,
         ge=1_000,

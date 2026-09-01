@@ -113,7 +113,17 @@ class ProductSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class PriceStats:
-    """Aggregates over a product's recorded price history, in a single currency."""
+    """Aggregates over a product's recorded price history, in a single currency.
+
+    Two different notions of "change", because people mean both:
+
+    * ``changed_by`` / ``changed_pct`` -- since the *first* observation. "How has this moved
+      since I started tracking it."
+    * ``changed_from_previous`` / ``changed_pct_from_previous`` -- since the *previous*
+      recorded price. "What just happened."
+
+    Reporting only the first was technically right and conversationally wrong.
+    """
 
     currency: str
     observations: int
@@ -126,6 +136,10 @@ class PriceStats:
     first_observed_at: datetime | None
     changed_by: Decimal | None = None
     changed_pct: Decimal | None = None
+    previous: Decimal | None = None
+    previous_observed_at: datetime | None = None
+    changed_from_previous: Decimal | None = None
+    changed_pct_from_previous: Decimal | None = None
     mixed_currency: bool = False
 
 

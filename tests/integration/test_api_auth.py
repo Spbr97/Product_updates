@@ -211,3 +211,54 @@ class TestAlertPagination:
 
         assert body["total"] == 3
         assert len(body["items"]) == 2
+
+
+class TestRateLimit:
+    @pytest.fixture
+    def limited_client(
+        self, clean_db: None, monkeypatch: pytest.MonkeyPatch
+    ) -> Iterator[TestClient]:
+        from product_tracker.core.config import reset_settings_cache
+
+        monkeypatch.setenv("API_RATE_LIMIT_PER_MINUTE", "60")
+        monkeypatch.setenv("API_RATE_LIMIT_BURST", "3")
+        reset_settings_cache()
+        with TestClient(create_app(), raise_server_exceptions=False) as client:
+            yield client
+
+    def test_a_burst_is_allowed_then_limited(self, limited_client: TestClient) -> None:
+        codes = [
+            limited_client.post(
+                "/api/v1/products", json={"url": f"https://shop.example.com/p/rl{i}"}
+            ).status_code
+            for i in range(5)
+        ]
+
+        assert codes[:3] == [201, 201, 201]
+        assert 429 in codes
+
+    def test_the_limit_response_uses_the_error_envelope(
+        self, limited_client: TestClient
+    ) -> None:
+        for i in range(6):
+            response = limited_client.post(
+                "/api/v1/products", json={"url": f"https://shop.example.com/p/env{i}"}
+            )
+            if response.status_code == 429:
+                assert response.json()["error"]["type"] == "rate_limited"
+                assert int(response.headers["retry-after"]) >= 1
+                return
+        pytest.fail("never hit the limit")
+
+    def test_reads_are_not_limited(self, limited_client: TestClient) -> None:
+        for _ in range(10):
+            limited_client.post("/api/v1/products", json={"url": "https://shop.example.com/x"})
+
+        assert limited_client.get("/api/v1/products").status_code == 200
+
+    def test_probes_are_not_limited(self, limited_client: TestClient) -> None:
+        for _ in range(10):
+            limited_client.post("/api/v1/products", json={"url": "https://shop.example.com/y"})
+
+        assert limited_client.get("/health").status_code == 200
+        assert limited_client.get("/health/ready").status_code == 200
