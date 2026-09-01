@@ -3,8 +3,14 @@
 ``/health`` must never touch a dependency -- an orchestrator uses it to decide whether to
 restart the process, and a database outage is not a reason to kill the API.
 
-``/health/ready`` reports each dependency and returns 503 when a required one is down, so
-a load balancer stops sending traffic while the process stays alive.
+``/health/ready`` reports each dependency and returns 503 when a *required* one is down.
+The distinction matters: the database is required, because nothing works without it. The
+worker and the notification providers are reported but not required -- an API that can
+serve reads and accept new products is doing its job even if no worker is running, and
+saying otherwise would take the whole service out of the load balancer over a background
+problem.
+
+Neither endpoint requires authentication: a probe should not need a credential.
 """
 
 from __future__ import annotations
@@ -12,7 +18,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Response, status
 
 from ... import __version__
+from ...core.config import get_settings
+from ...core.security import is_auth_enabled
 from ...db.session import current_revision, get_session_factory, ping
+from ...notifications.registry import provider_status
+from ...scheduler.status import scheduler_status
 from ..schemas.common import DependencyStatus, HealthResponse, ReadinessResponse
 
 router = APIRouter(tags=["health"])
@@ -30,12 +40,15 @@ def health() -> HealthResponse:
     responses={503: {"description": "A required dependency is unavailable."}},
 )
 def readiness(response: Response) -> ReadinessResponse:
-    dependencies = [_database_status()]
-    ready = all(dep.healthy for dep in dependencies)
-    if not ready:
+    database = _database_status()
+    dependencies = [database, *_optional_dependencies()]
+
+    # Only the database gates readiness.
+    if not database.healthy:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
     return ReadinessResponse(
-        status="ready" if ready else "not_ready",
+        status="ready" if database.healthy else "not_ready",
         version=__version__,
         dependencies=dependencies,
     )
@@ -67,6 +80,71 @@ def _database_status() -> DependencyStatus:
         return DependencyStatus(name="database", healthy=False, detail=_short(exc))
     finally:
         session.close()
+
+
+def _optional_dependencies() -> list[DependencyStatus]:
+    """Report the worker and notification channels without gating readiness on them."""
+    return [_scheduler_status(), _notifications_status(), _auth_status()]
+
+
+def _scheduler_status() -> DependencyStatus:
+    try:
+        session = get_session_factory()()
+    except Exception as exc:
+        return DependencyStatus(name="scheduler", healthy=False, detail=_short(exc))
+    try:
+        state = scheduler_status(session)
+    except Exception as exc:
+        return DependencyStatus(name="scheduler", healthy=False, detail=_short(exc))
+    finally:
+        session.close()
+
+    running = state.worker_running
+    return DependencyStatus(
+        name="scheduler",
+        # "Nothing scheduled" is not unhealthy: a fresh install has no products yet.
+        healthy=running is not False,
+        detail=(
+            f"{state.product_jobs} product job(s); {state.detail}"
+            if state.available
+            else state.detail
+        ),
+    )
+
+
+def _notifications_status() -> DependencyStatus:
+    try:
+        settings = get_settings()
+        rows = provider_status(settings)
+    except Exception as exc:
+        return DependencyStatus(name="notifications", healthy=False, detail=_short(exc))
+
+    usable = [slug for slug, _name, enabled, configured in rows if enabled and configured]
+    requested = [slug for slug, _name, enabled, _configured in rows if enabled]
+    missing = sorted(set(requested) - set(usable))
+
+    if not requested:
+        return DependencyStatus(
+            name="notifications", healthy=False, detail="no providers enabled; alerts go nowhere"
+        )
+    detail = f"active: {', '.join(sorted(usable)) or 'none'}"
+    if missing:
+        detail += f"; enabled but unconfigured: {', '.join(missing)}"
+    return DependencyStatus(name="notifications", healthy=bool(usable), detail=detail)
+
+
+def _auth_status() -> DependencyStatus:
+    try:
+        settings = get_settings()
+    except Exception as exc:
+        return DependencyStatus(name="auth", healthy=False, detail=_short(exc))
+
+    if not is_auth_enabled(settings):
+        return DependencyStatus(
+            name="auth", healthy=True, detail="disabled (no API_KEY set); do not expose publicly"
+        )
+    scope = "writes" if settings.api_allow_anonymous_reads else "reads and writes"
+    return DependencyStatus(name="auth", healthy=True, detail=f"API key required for {scope}")
 
 
 def _short(exc: Exception) -> str:

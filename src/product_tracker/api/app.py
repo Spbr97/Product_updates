@@ -18,7 +18,9 @@ from .. import __version__
 from ..core.config import Settings, get_settings
 from ..core.logging import configure_logging, get_logger
 from ..db.session import get_engine
+from .deps import RequireRead
 from .errors import register_exception_handlers
+from .middleware import BodySizeLimitMiddleware
 from .schemas.common import ErrorResponse
 
 log = get_logger(__name__)
@@ -40,7 +42,10 @@ def build_v1_router() -> APIRouter:
     """
     from .routers import alerts, history, products, stores
 
-    router = APIRouter(prefix=API_V1_PREFIX)
+    # The read guard is attached once, here: every versioned route inherits it, so a new
+    # router cannot be added and accidentally left unguarded. Write endpoints add their
+    # own stricter dependency. Health is mounted outside this router and stays open.
+    router = APIRouter(prefix=API_V1_PREFIX, dependencies=[RequireRead])
     router.include_router(products.router)
     router.include_router(history.router)
     router.include_router(alerts.router)
@@ -73,12 +78,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url="/redoc",
         openapi_url="/openapi.json",
         responses={
+            401: {"model": ErrorResponse, "description": "Missing or invalid API key"},
+            413: {"model": ErrorResponse, "description": "Request body too large"},
             422: {"model": ErrorResponse, "description": "Validation error"},
             500: {"model": ErrorResponse, "description": "Internal error"},
         },
     )
 
     register_exception_handlers(app)
+
+    # Applied before routing: every request this API accepts is a small JSON object, so a
+    # large body is either a mistake or an attempt to exhaust memory.
+    app.add_middleware(
+        BodySizeLimitMiddleware, max_bytes=settings.api_max_request_bytes
+    )
 
     from .routers import health  # Imported here to keep module import side-effect free.
 

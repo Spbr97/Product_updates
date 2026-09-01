@@ -7,10 +7,10 @@ rules, and notifies you through configured providers — on a schedule, in the b
 Built to be extended: adding a store, a notification channel, or an alert condition means
 adding a module, not editing the tracking engine.
 
-> **Status: phases 1–5 of 7 complete.** The platform now runs itself: add products by
-> URL and a background worker checks them on their own interval, records history, and
-> alerts you. Remaining work is API/CLI polish and a quality pass — see
-> [Roadmap](#roadmap).
+> **Status: phases 1–6 of 7 complete.** Feature-complete: add products by URL, a
+> background worker checks them on their own interval, records history, and alerts
+> you — through an authenticated REST API or the CLI. Phase 7 is the quality pass —
+> see [Roadmap](#roadmap).
 
 ---
 
@@ -146,7 +146,9 @@ most:
 | `HTTP_TIMEOUT_SECONDS` / `HTTP_MAX_RETRIES` | `25` / `3` | Outbound request bounds. |
 | `STORE_MIN_INTERVAL_SECONDS` / `FETCH_JITTER_SECONDS` | `5` / `3` | Politeness: minimum gap between requests to one store, plus random jitter. |
 | `PLAYWRIGHT_ENABLED` | `true` | Set `false` to run without a browser. |
-| `API_KEY` | *(unset)* | If set, required as `X-API-Key` on mutating endpoints. |
+| `API_KEY` | *(unset)* | If set, required as `X-API-Key` on mutating endpoints. Unset means the API is open — fine on localhost, not in public. |
+| `API_ALLOW_ANONYMOUS_READS` | `true` | Set `false` to require the key on `GET` too. |
+| `API_MAX_REQUEST_BYTES` | `64000` | Bodies over this are rejected with 413. |
 | `BLOCK_PRIVATE_ADDRESSES` | `true` | SSRF guard. Rejects URLs resolving to private/loopback ranges. |
 | `NOTIFY_DEFAULT_PROVIDERS` | `console` | Comma-separated provider slugs. |
 
@@ -199,6 +201,24 @@ uvicorn product_tracker.api.app:get_app --factory --reload
 - `/api/v1/alerts/{id}` — `GET` one, `DELETE` to remove.
 - `/api/v1/products/{id}/pause` and `/resume` — stop or restart scheduled checks.
 - `/api/v1/stores` — supported stores, from the adapter registry.
+
+`GET /health/ready` reports four dependencies: `database`, `scheduler`,
+`notifications`, and `auth`. Only the database gates readiness — an API that can serve
+reads and accept products is doing its job even with no worker running, and failing the
+probe would pull it out of the load balancer over a background problem.
+
+### Authentication
+
+Off by default, which is correct for something bound to localhost. Set `API_KEY` and every
+mutating endpoint requires the header:
+
+```
+X-API-Key: <your key>
+```
+
+Reads stay anonymous unless you also set `API_ALLOW_ANONYMOUS_READS=false`. The key is
+compared in constant time, a 401 advertises the scheme in `WWW-Authenticate`, and the
+health probes never require a credential — a probe should not need one.
 
 Every error response uses one envelope:
 
@@ -369,6 +389,9 @@ docker build -f docker/Dockerfile `
 | `status` says "no stores registered" | Run `product-tracker stores sync`. |
 | Integration tests all skip | `TEST_DATABASE_URL` is unset. That is intentional, not a failure. |
 | Readiness hangs | Should not happen: `DB_CONNECT_TIMEOUT_SECONDS` (default 5) bounds connection attempts. |
+| `401` from the API | `API_KEY` is set; send `X-API-Key`. The 401's `WWW-Authenticate` header names it. |
+| `413` from the API | Body over `API_MAX_REQUEST_BYTES` (default 64 KB). |
+| `status` says the worker is not running | It infers this from overdue jobs in the job store. Start it: `product-tracker worker`. |
 | The worker never checks a product added while it was running | Reconcile runs every `RECONCILE_INTERVAL_SECONDS` (default 60). Wait one interval, or restart the worker. |
 | A check is recorded as `skipped` | The store's circuit breaker is open after repeated failures. It half-opens after `STORE_CIRCUIT_RESET_SECONDS`. `error_detail` says how long is left. |
 | Every job runs twice | Two workers are running against one database. Only run one. |
@@ -392,5 +415,5 @@ docker build -f docker/Dockerfile `
 | 3 | Price/availability history, statistics, change detection | **done** |
 | 4 | Tracking rules, notification abstraction, providers, deduplication | **done** |
 | 5 | Scheduler, background worker, retries, rate limiting | **done** |
-| 6 | Complete API and CLI surface, auth, pagination | next |
-| 7 | Test coverage, Docker polish, docs, security and performance review | |
+| 6 | Complete API and CLI surface, auth, pagination | **done** |
+| 7 | Test coverage, Docker polish, docs, security and performance review | next |

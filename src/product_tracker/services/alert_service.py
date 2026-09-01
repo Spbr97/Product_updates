@@ -97,19 +97,11 @@ class AlertService:
     def list(
         self, *, product_id: int | None = None, limit: int = 20, offset: int = 0
     ) -> RulePage:
-        if product_id is not None:
-            if self.products.get(product_id) is None:
-                raise NotFoundError("Product", product_id)
-            items = self.rules.list_for_product(product_id)
-            return RulePage(
-                items=items[offset : offset + limit],
-                total=len(items),
-                limit=limit,
-                offset=offset,
-            )
+        if product_id is not None and self.products.get(product_id) is None:
+            raise NotFoundError("Product", product_id)
         return RulePage(
-            items=self.rules.list_all(limit=limit, offset=offset),
-            total=self.rules.count(),
+            items=self.rules.list_page(limit=limit, offset=offset, product_id=product_id),
+            total=self.rules.count_filtered(product_id=product_id),
             limit=limit,
             offset=offset,
         )

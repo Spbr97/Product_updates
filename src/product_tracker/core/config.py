@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     api_allow_anonymous_reads: bool = True
     api_max_page_size: int = Field(default=100, ge=1, le=1000)
     api_default_page_size: int = Field(default=20, ge=1, le=1000)
+    api_max_request_bytes: int = Field(
+        default=64_000,
+        ge=1_000,
+        le=10_000_000,
+        description="Request bodies larger than this are rejected with 413.",
+    )
 
     # --- URL safety -------------------------------------------------------------
     block_private_addresses: bool = Field(

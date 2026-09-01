@@ -6,15 +6,22 @@ without reaching for psql.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import typer
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from .. import __version__
-from ..core.config import get_settings, mask_dsn_password
+from ..core.config import Settings, get_settings, mask_dsn_password
+from ..db.models import CheckExecution
 from ..db.session import current_revision, get_session_factory, ping
 from ..domain.enums import TrackingStatus
 from ..domain.errors import ConfigurationError
+from ..notifications.registry import provider_status
 from ..repositories.products import ProductRepository
 from ..repositories.stores import StoreRepository
+from ..scheduler.status import scheduler_status
 from ..stores.catalogue import KNOWN_STORES
 from .formatting import ExitCode, error, info, stdout, success, table, warn, yes_no
 
@@ -62,10 +69,72 @@ def status() -> None:
         state.add_row("products paused", str(counts[TrackingStatus.PAUSED]))
         stdout.print(state)
 
+        _print_worker(session)
+        _print_recent_checks(session)
+        _print_providers(settings)
+
         if store_count == 0:
             warn("no stores registered -- run: product-tracker stores sync")
     finally:
         session.close()
+
+
+def _print_worker(session: Session) -> None:
+    """Report what the job store says. Read from PostgreSQL, so no worker is needed."""
+    state = scheduler_status(session)
+
+    worker = table("Worker", ["Item", "Value"])
+    worker.add_row("job store", "available" if state.available else "[red]missing[/red]")
+    worker.add_row("product jobs", str(state.product_jobs))
+    worker.add_row(
+        "next run",
+        state.next_run_at.strftime("%Y-%m-%d %H:%M UTC") if state.next_run_at else "-",
+    )
+    running = state.worker_running
+    worker.add_row(
+        "worker",
+        "[green]appears to be running[/green]"
+        if running
+        else "[dim]nothing scheduled[/dim]"
+        if running is None
+        else "[red]does not appear to be running[/red]",
+    )
+    stdout.print(worker)
+
+    if running is False:
+        warn(f"{state.detail} -- start it with: product-tracker worker")
+
+
+def _print_recent_checks(session: Session) -> None:
+    """A day's worth of check outcomes: the quickest read on whether tracking is healthy."""
+    since = datetime.now(UTC) - timedelta(days=1)
+    rows = session.execute(
+        select(CheckExecution.status, func.count())
+        .where(CheckExecution.started_at >= since)
+        .group_by(CheckExecution.status)
+    ).all()
+
+    if not rows:
+        return
+
+    summary = table("Checks (last 24h)", ["Status", "Count"])
+    for status_value, count in sorted(rows, key=lambda row: row[0].value):
+        summary.add_row(status_value.value, str(count))
+    stdout.print(summary)
+
+
+def _print_providers(settings: Settings) -> None:
+    providers = table("Notifications", ["Provider", "Enabled", "Configured"])
+    for slug, _name, enabled, configured in provider_status(settings):
+        providers.add_row(slug, yes_no(enabled), yes_no(configured))
+    stdout.print(providers)
+
+    usable = [
+        slug for slug, _n, enabled, configured in provider_status(settings)
+        if enabled and configured
+    ]
+    if not usable:
+        warn("no usable notification provider -- alerts will be recorded but not delivered")
 
 
 @stores_app.command("list")

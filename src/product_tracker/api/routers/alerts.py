@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query, status
 
 from ...domain.enums import TrackingStatus
 from ...services.alert_service import AlertService
-from ..deps import DbSession, PageParams
+from ..deps import DbSession, PageParams, RequireWrite
 from ..schemas.alerts import AlertCreate, AlertResponse
 from ..schemas.common import ErrorResponse, Page
 from ..schemas.products import ProductResponse
@@ -25,6 +25,7 @@ _NOT_FOUND: dict[int | str, dict[str, Any]] = {
     response_model=AlertResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a tracking rule",
+    dependencies=[RequireWrite],
     responses={
         **_NOT_FOUND,
         409: {"model": ErrorResponse, "description": "This product already has that rule."},
@@ -74,6 +75,7 @@ def get_alert(rule_id: int, session: DbSession) -> AlertResponse:
     "/alerts/{rule_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a tracking rule",
+    dependencies=[RequireWrite],
     responses=_NOT_FOUND,
 )
 def delete_alert(rule_id: int, session: DbSession) -> None:
@@ -84,6 +86,7 @@ def delete_alert(rule_id: int, session: DbSession) -> None:
     "/products/{product_id}/pause",
     response_model=ProductResponse,
     summary="Pause scheduled checks",
+    dependencies=[RequireWrite],
     responses=_NOT_FOUND,
 )
 def pause_product(product_id: int, session: DbSession) -> ProductResponse:
@@ -99,6 +102,7 @@ def pause_product(product_id: int, session: DbSession) -> ProductResponse:
     "/products/{product_id}/resume",
     response_model=ProductResponse,
     summary="Resume scheduled checks",
+    dependencies=[RequireWrite],
     responses=_NOT_FOUND,
 )
 def resume_product(product_id: int, session: DbSession) -> ProductResponse:

@@ -41,7 +41,11 @@ _ERROR_MAP: tuple[tuple[type[Exception], int, str], ...] = (
 
 
 def error_response(
-    status_code: int, error_type: str, message: str, detail: dict | None = None
+    status_code: int,
+    error_type: str,
+    message: str,
+    detail: dict | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     """Build the standard error envelope.
 
@@ -53,7 +57,7 @@ def error_response(
     body: dict[str, object] = {"type": error_type, "message": message}
     if detail is not None:
         body["detail"] = jsonable_encoder(detail)
-    return JSONResponse(status_code=status_code, content={"error": body})
+    return JSONResponse(status_code=status_code, content={"error": body}, headers=headers)
 
 
 def _classify(exc: Exception) -> tuple[int, str]:
@@ -87,10 +91,13 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_exception(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        # Headers must survive: a 401 carries the WWW-Authenticate challenge that tells
+        # the client how to authenticate, and rebuilding the response would drop it.
         return error_response(
             exc.status_code,
             _HTTP_ERROR_TYPES.get(exc.status_code, "http_error"),
             str(exc.detail),
+            headers=getattr(exc, "headers", None),
         )
 
     @app.exception_handler(Exception)

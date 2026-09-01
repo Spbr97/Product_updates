@@ -15,7 +15,7 @@ from ...domain.enums import TrackingStatus
 from ...services.product_service import ProductService
 from ...services.tracking import TrackingEngine
 from ...stores.registry import default_registry
-from ..deps import Config, DbSession, PageParams
+from ..deps import Config, DbSession, PageParams, RequireWrite
 from ..schemas.common import ErrorResponse, Page
 from ..schemas.products import CheckResponse, ProductCreate, ProductResponse
 
@@ -27,6 +27,7 @@ router = APIRouter(prefix="/products", tags=["products"])
     response_model=ProductResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Track a new product",
+    dependencies=[RequireWrite],
     responses={
         409: {"model": ErrorResponse, "description": "This listing is already tracked."},
         422: {"model": ErrorResponse, "description": "URL rejected by validation or SSRF guard."},
@@ -78,6 +79,7 @@ def get_product(product_id: int, session: DbSession, settings: Config) -> Produc
     "/{product_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Stop tracking a product",
+    dependencies=[RequireWrite],
     responses={404: {"model": ErrorResponse, "description": "No such product."}},
 )
 def delete_product(product_id: int, session: DbSession, settings: Config) -> None:
@@ -89,6 +91,7 @@ def delete_product(product_id: int, session: DbSession, settings: Config) -> Non
     "/{product_id}/check",
     response_model=CheckResponse,
     summary="Check a product now",
+    dependencies=[RequireWrite],
     responses={404: {"model": ErrorResponse, "description": "No such product."}},
 )
 def check_product(product_id: int, session: DbSession, settings: Config) -> CheckResponse:
