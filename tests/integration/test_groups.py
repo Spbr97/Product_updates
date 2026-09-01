@@ -11,10 +11,10 @@ Two properties here are worth more than the rest put together:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Iterator
 
 import pytest
 from sqlalchemy import event, func, select
@@ -155,7 +155,8 @@ class TestAttaching:
 
         assert first.id == second.id
         assert first.label == "256GB / Black"
-        assert db_session.execute(select(func.count()).select_from(ProductVariant)).scalar_one() == 1
+        variants = db_session.execute(select(func.count()).select_from(ProductVariant))
+        assert variants.scalar_one() == 1
 
     def test_a_title_with_no_clues_is_refused_rather_than_guessed(
         self, db_session: Session

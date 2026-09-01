@@ -157,6 +157,11 @@ _DATA_TABLES = (
     "price_history",
     "check_executions",
     "products",
+    # Grouping tables: without these a group created by one test is still there for the
+    # next one, which quietly turns "list the groups" assertions into order-dependent
+    # nonsense. Listed after products because products reference variants.
+    "product_variants",
+    "product_groups",
     # Scheduler jobs and heartbeats too: a test that touches either would otherwise
     # leave rows that make a later test believe a worker is scheduled or alive.
     "apscheduler_jobs",

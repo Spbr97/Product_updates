@@ -6,7 +6,12 @@ from decimal import Decimal
 
 import pytest
 
-from product_tracker.utils.money import format_money, parse_currency, parse_price
+from product_tracker.utils.money import (
+    format_money,
+    format_money_short,
+    parse_currency,
+    parse_price,
+)
 
 
 class TestParsePrice:
@@ -122,3 +127,45 @@ class TestRoundTrip:
         assert price is not None
         currency = parse_currency(raw)
         assert parse_price(format_money(price, currency)) == price
+
+
+class TestFormatMoneyShort:
+    """Compact money for the comparison grid."""
+
+    @pytest.mark.parametrize(
+        ("amount", "expected"),
+        [
+            ("82900", "\u20b982,900"),
+            ("129900", "\u20b91,29,900"),
+            ("1299000", "\u20b912,99,000"),
+            ("999", "\u20b9999"),
+        ],
+    )
+    def test_rupees_use_indian_digit_grouping(self, amount: str, expected: str) -> None:
+        """Every Indian retailer we read writes prices this way.
+
+        Rendering "1,299,000" would make a reader do conversion work to check the figure
+        against the shop's own page.
+        """
+        assert format_money_short(Decimal(amount), "INR") == expected
+
+    def test_other_currencies_keep_western_grouping(self) -> None:
+        assert format_money_short(Decimal("1299999"), "USD") == "$1,299,999"
+
+    def test_whole_amounts_drop_the_decimals(self) -> None:
+        # In a grid of twenty prices, ".00" twenty times is pure noise.
+        assert format_money_short(Decimal("82900.00"), "INR") == "\u20b982,900"
+
+    def test_real_fractions_are_kept(self) -> None:
+        # Rounding a price shown to a shopper is not acceptable, however tidy it looks.
+        assert format_money_short(Decimal("999.50"), "INR") == "\u20b9999.50"
+        assert format_money_short(Decimal("12.99"), "USD") == "$12.99"
+
+    def test_unknown_currency_falls_back_to_the_code(self) -> None:
+        assert format_money_short(Decimal("75"), "XYZ") == "75 XYZ"
+
+    def test_no_amount_renders_a_dash(self) -> None:
+        assert format_money_short(None, "INR") == "-"
+
+    def test_negative_amounts_keep_their_sign(self) -> None:
+        assert format_money_short(Decimal("-3000"), "INR") == "-\u20b93,000"

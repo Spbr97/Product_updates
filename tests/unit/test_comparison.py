@@ -104,7 +104,9 @@ class TestPriceFailureIsNotOutOfStock:
 
 class TestOrdinaryReadings:
     def test_a_price_reports_ok(self) -> None:
-        cell = cell_for_product(make_product(), last_check=(CheckStatus.SUCCESS.value, None), now=NOW)
+        cell = cell_for_product(
+            make_product(), last_check=(CheckStatus.SUCCESS.value, None), now=NOW
+        )
         assert cell.status is CellStatus.OK
         assert cell.has_price
         assert cell.price == Decimal("82900.00")
