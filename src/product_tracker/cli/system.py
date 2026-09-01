@@ -21,6 +21,7 @@ from ..domain.errors import ConfigurationError
 from ..notifications.registry import provider_status
 from ..repositories.products import ProductRepository
 from ..repositories.stores import StoreRepository
+from ..scheduler import heartbeat
 from ..scheduler.status import scheduler_status
 from ..stores.catalogue import KNOWN_STORES
 from .formatting import ExitCode, error, info, stdout, success, table, warn, yes_no
@@ -69,7 +70,7 @@ def status() -> None:
         state.add_row("products paused", str(counts[TrackingStatus.PAUSED]))
         stdout.print(state)
 
-        _print_worker(session)
+        _print_worker(session, settings)
         _print_recent_checks(session)
         _print_providers(settings)
 
@@ -79,9 +80,16 @@ def status() -> None:
         session.close()
 
 
-def _print_worker(session: Session) -> None:
-    """Report what the job store says. Read from PostgreSQL, so no worker is needed."""
+def _print_worker(session: Session, settings: Settings) -> None:
+    """What work is scheduled, and whether a worker is alive.
+
+    Two different questions with two different sources: the job store says what is
+    scheduled; the heartbeat says whether anything is running it.
+    """
     state = scheduler_status(session)
+    liveness = heartbeat.read(
+        session, reconcile_interval_seconds=settings.reconcile_interval_seconds
+    )
 
     worker = table("Worker", ["Item", "Value"])
     worker.add_row("job store", "available" if state.available else "[red]missing[/red]")
@@ -90,19 +98,25 @@ def _print_worker(session: Session) -> None:
         "next run",
         state.next_run_at.strftime("%Y-%m-%d %H:%M UTC") if state.next_run_at else "-",
     )
-    running = state.worker_running
+    running = liveness.running
     worker.add_row(
         "worker",
-        "[green]appears to be running[/green]"
+        "[green]running[/green]"
         if running
-        else "[dim]nothing scheduled[/dim]"
+        else "[dim]never started[/dim]"
         if running is None
-        else "[red]does not appear to be running[/red]",
+        else "[red]not running[/red]",
     )
+    worker.add_row("heartbeat", liveness.detail)
     stdout.print(worker)
 
     if running is False:
-        warn(f"{state.detail} -- start it with: product-tracker worker")
+        warn("no worker is running -- start it with: product-tracker worker")
+    if liveness.workers > 1:
+        warn(
+            f"{liveness.workers} workers are reporting in; run only one per database, "
+            "or every job runs more than once"
+        )
 
 
 def _print_recent_checks(session: Session) -> None:

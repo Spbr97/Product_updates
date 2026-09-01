@@ -33,10 +33,24 @@ class TestStatus:
         for section in ("Configuration", "State", "Worker", "Notifications"):
             assert section in result.stdout
 
-    def test_reports_no_worker_when_nothing_is_scheduled(self, clean_db: None) -> None:
+    def test_reports_that_no_worker_has_started(self, clean_db: None) -> None:
+        """Liveness comes from the heartbeat now, not from guessing at the job store."""
         result = runner.invoke(app, ["status"])
 
-        assert "nothing scheduled" in result.stdout
+        assert "never started" in result.stdout
+        assert "has ever reported in" in result.stdout
+
+    def test_reports_a_live_worker(self, clean_db: None) -> None:
+        from product_tracker.db.session import session_scope
+        from product_tracker.scheduler import heartbeat
+
+        with session_scope() as session:
+            heartbeat.touch(session, "test-worker")
+
+        result = runner.invoke(app, ["status"])
+
+        assert "running" in result.stdout
+        assert "last beat" in result.stdout
 
     def test_shows_recent_check_counts(self, clean_db: None) -> None:
         respx.get(URL).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))

@@ -20,6 +20,7 @@ from ..core.logging import EVENT_JOB_RECONCILED, get_logger
 from ..db.session import session_scope
 from ..repositories.products import ProductRepository
 from ..workers import check_worker
+from . import heartbeat
 from .apscheduler_queue import APSchedulerJobQueue
 from .jobqueue import JobQueue, ReconcileReport
 from .throttle import StoreGuard
@@ -28,11 +29,13 @@ log = get_logger(__name__)
 
 #: Set by the running WorkerRunner so module-level jobs can reach its queue.
 _ACTIVE_QUEUE: JobQueue | None = None
+_ACTIVE_WORKER_ID: str | None = None
 
 
-def _set_active_queue(queue: JobQueue | None) -> None:
-    global _ACTIVE_QUEUE
+def _set_active_queue(queue: JobQueue | None, worker_id: str | None = None) -> None:
+    global _ACTIVE_QUEUE, _ACTIVE_WORKER_ID
     _ACTIVE_QUEUE = queue
+    _ACTIVE_WORKER_ID = worker_id
 
 
 RECONCILE_JOB_ID = "system:reconcile"
@@ -56,8 +59,12 @@ def desired_schedule(settings: Settings) -> dict[int, int]:
         }
 
 
-def reconcile_now(queue: JobQueue, settings: Settings) -> ReconcileReport:
-    """One reconcile pass. Safe to call at any time."""
+def reconcile_now(
+    queue: JobQueue, settings: Settings, *, worker_id: str | None = None
+) -> ReconcileReport:
+    """One reconcile pass, and a heartbeat. Safe to call at any time."""
+    if worker_id is not None:
+        _beat(worker_id, settings)
     report = queue.reconcile(desired_schedule(settings))
     if report.changed:
         log.info(
@@ -70,11 +77,28 @@ def reconcile_now(queue: JobQueue, settings: Settings) -> ReconcileReport:
     return report
 
 
+def _beat(worker_id: str, settings: Settings) -> None:
+    """Record liveness, and tidy up after workers that died without cleaning up.
+
+    Never raises: a heartbeat failure must not stop the checks the worker exists to run.
+    """
+    try:
+        with session_scope() as session:
+            heartbeat.touch(session, worker_id)
+            heartbeat.prune(
+                session,
+                older_than_seconds=heartbeat.stale_after(settings.reconcile_interval_seconds) * 10,
+            )
+    except Exception as exc:
+        log.warning("heartbeat.failed", exc_info=exc)
+
+
 class WorkerRunner:
     """Owns the scheduler's lifecycle for one process."""
 
     def __init__(self, settings: Settings | None = None, queue: JobQueue | None = None) -> None:
         self.settings = settings or get_settings()
+        self.worker_id = heartbeat.new_worker_id()
         self.guard = StoreGuard(
             min_interval_seconds=self.settings.store_min_interval_seconds,
             jitter_seconds=self.settings.fetch_jitter_seconds,
@@ -97,7 +121,7 @@ class WorkerRunner:
         check_worker.set_guard(self.guard)
         # The reconcile job is a module-level function (APScheduler pickles a reference
         # to it), so it reaches this runner's queue through module state.
-        _set_active_queue(self.queue)
+        _set_active_queue(self.queue, self.worker_id)
 
         self.queue.schedule_recurring(
             RECONCILE_JOB_ID,
@@ -111,7 +135,7 @@ class WorkerRunner:
             NOTIFICATION_RETRY_SECONDS,
             first_run_now=False,
         )
-        return reconcile_now(self.queue, self.settings)
+        return reconcile_now(self.queue, self.settings, worker_id=self.worker_id)
 
     def run(self) -> None:
         """Start the scheduler and block until stopped. Handles SIGINT and SIGTERM."""
@@ -138,6 +162,13 @@ class WorkerRunner:
         self.queue.shutdown(wait=True)
         check_worker.set_guard(None)
         _set_active_queue(None)
+        # Clear the heartbeat so a deliberately stopped worker reads as stopped at once,
+        # rather than "running" until the beat goes stale.
+        try:
+            with session_scope() as session:
+                heartbeat.clear(session, self.worker_id)
+        except Exception as exc:
+            log.warning("heartbeat.clear_failed", exc_info=exc)
 
     def _install_signal_handlers(self) -> None:
         def handle(signum: int, _frame: FrameType | None) -> None:
@@ -163,6 +194,6 @@ def _reconcile_job() -> None:
     if queue is None:
         return
     try:
-        reconcile_now(queue, get_settings())
+        reconcile_now(queue, get_settings(), worker_id=_ACTIVE_WORKER_ID)
     except Exception as exc:
         log.error("reconcile.failed", exc_info=exc)

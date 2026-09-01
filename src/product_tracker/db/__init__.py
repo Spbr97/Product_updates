@@ -9,6 +9,7 @@ from .models import (
     Product,
     Store,
     TrackingRule,
+    WorkerHeartbeat,
 )
 from .session import (
     current_revision,
@@ -28,6 +29,7 @@ __all__ = [
     "Product",
     "Store",
     "TrackingRule",
+    "WorkerHeartbeat",
     "current_revision",
     "get_engine",
     "get_session_factory",

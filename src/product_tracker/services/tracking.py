@@ -13,9 +13,10 @@ History is appended in the same transaction as the execution row, and every hist
 carries the ``check_execution_id`` that produced it, so any recorded price can be traced
 back to the fetch that saw it.
 
-After history is recorded, the product's rules are evaluated and any matches become
-notifications. None of that can fail a check: the observation is already stored, and a
-misbehaving rule or an unreachable provider is logged and recorded rather than raised.
+After history is recorded, the product's rules are evaluated and any matches are
+*recorded* as pending notifications. Delivery is deliberately not done here -- see
+``check_runner`` -- so no provider can hold this transaction open. None of this can fail a
+check: the observation is already stored, and a misbehaving rule is logged, not raised.
 
 Transient outcomes are retried with capped exponential backoff. An optional
 ``CheckGuard`` -- supplied by the worker, absent for one-shot checks -- paces requests per
@@ -374,13 +375,15 @@ class TrackingEngine:
         if not matches:
             return
 
+        # Record only. Delivery happens in a separate transaction (see check_runner):
+        # talking to an SMTP server or a webhook must not hold this one open.
         notifier = self._notifier(session)
-        report = notifier.dispatch(matches, when=now)
-        execution.notifications_created = report.created
+        recorded = notifier.record_all(matches, when=now)
+        execution.notifications_created = recorded
 
         # Only rules that produced a *new* notification start their cooldown; one that
         # was deduplicated has not actually alerted anyone.
-        if report.created:
+        if recorded:
             fired = {match.rule_id for match in matches}
             for rule in rules:
                 if rule.id in fired:

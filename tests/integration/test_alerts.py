@@ -104,6 +104,20 @@ def stub(html: str) -> None:
     respx.get(URL).mock(return_value=httpx.Response(200, html=html))
 
 
+def check_and_deliver(engine: TrackingEngine, session: Session, product_id: int):
+    """Check, then deliver -- the two steps ``check_runner`` performs in production.
+
+    The engine records notifications but no longer sends them, so that delivery does not
+    hold the check's transaction open. These tests share one rolled-back session, so both
+    steps run on it here rather than in separate transactions.
+    """
+    execution = engine.check_product(session, product_id)
+    NotificationService(
+        session, get_settings(), providers=engine.providers
+    ).deliver_pending()
+    return execution
+
+
 class TestAlertService:
     def test_adds_a_rule(self, alerts: AlertService, product_id: int) -> None:
         rule = alerts.add(product_id, RuleType.PRICE_DROPPED)
@@ -194,10 +208,10 @@ class TestRulesFireOnChecks:
         stub(load("jsonld_in_stock.html"))
         product = service.add(URL)
         alerts.add(product.id, RuleType.PRICE_DROPPED)
-        engine.check_product(db_session, product.id)  # baseline
+        check_and_deliver(engine, db_session, product.id)  # baseline
 
         stub(CHEAPER)
-        execution = engine.check_product(db_session, product.id)
+        execution = check_and_deliver(engine, db_session, product.id)
 
         assert execution.rules_evaluated == 1
         assert execution.rules_matched == 1
@@ -218,7 +232,7 @@ class TestRulesFireOnChecks:
         product = service.add(URL)
         alerts.add(product.id, RuleType.PRICE_DROPPED)
 
-        execution = engine.check_product(db_session, product.id)
+        execution = check_and_deliver(engine, db_session, product.id)
 
         assert execution.rules_matched == 0
         assert provider.sent == []
@@ -237,7 +251,7 @@ class TestRulesFireOnChecks:
             product.id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "70000"}
         )
 
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         assert len(provider.sent) == 1
         assert "Target price reached" in provider.sent[0].title
@@ -253,10 +267,10 @@ class TestRulesFireOnChecks:
         stub(load("jsonld_out_of_stock.html"))
         product = service.add(URL)
         alerts.add(product.id, RuleType.BECAME_AVAILABLE)
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         stub(load("jsonld_in_stock.html"))
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         assert len(provider.sent) == 1
         assert "Back in stock" in provider.sent[0].title
@@ -273,10 +287,10 @@ class TestRulesFireOnChecks:
         stub(load("jsonld_in_stock.html"))
         product = service.add(URL)
         alerts.add(product.id, RuleType.BECAME_UNAVAILABLE)
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         respx.get(URL).mock(return_value=httpx.Response(403))
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         assert provider.sent == []
 
@@ -291,11 +305,11 @@ class TestRulesFireOnChecks:
         stub(load("jsonld_in_stock.html"))
         product = service.add(URL)
         rule = alerts.add(product.id, RuleType.PRICE_DROPPED)
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
         alerts.set_enabled(rule.id, False)
 
         stub(CHEAPER)
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         assert provider.sent == []
 
@@ -309,7 +323,7 @@ class TestRulesFireOnChecks:
         stub(load("jsonld_in_stock.html"))
         product = service.add(URL)
 
-        execution = engine.check_product(db_session, product.id)
+        execution = check_and_deliver(engine, db_session, product.id)
 
         assert execution.rules_evaluated == 0
         assert provider.sent == []
@@ -328,7 +342,7 @@ class TestDeduplication:
         stub(load("jsonld_in_stock.html"))
         product = service.add(URL)
         alerts.add(product.id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "70000"})
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
         return int(product.id)
 
     def test_repeated_observation_alerts_once(
@@ -343,7 +357,7 @@ class TestDeduplication:
         product_id = self._drop(service, alerts, engine, db_session)
 
         for _ in range(4):
-            engine.check_product(db_session, product_id)
+            check_and_deliver(engine, db_session, product_id)
 
         assert len(provider.sent) == 1
         assert NotificationRepository(db_session).list_for_product(product_id).__len__() == 1
@@ -360,7 +374,7 @@ class TestDeduplication:
         product_id = self._drop(service, alerts, engine, db_session)
 
         stub(CHEAPER)
-        engine.check_product(db_session, product_id)
+        check_and_deliver(engine, db_session, product_id)
 
         assert len(provider.sent) == 2
 
@@ -402,11 +416,11 @@ class TestDeduplication:
             params={"target_price": "70000"},
             cooldown_seconds=3600,
         )
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
         assert len(provider.sent) == 1
 
         stub(CHEAPER)
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         assert len(provider.sent) == 1  # still within the cooldown
 
@@ -422,7 +436,7 @@ class TestDeduplication:
         rule = alerts.list(product_id=product_id).items[0]
         first_fired = rule.last_fired_at
 
-        engine.check_product(db_session, product_id)  # deduplicated
+        check_and_deliver(engine, db_session, product_id)  # deduplicated
 
         assert rule.last_fired_at == first_fired
 
@@ -440,7 +454,7 @@ class TestDelivery:
         product = service.add(URL)
         alerts.add(product.id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "70000"})
 
-        execution = engine.check_product(db_session, product.id)
+        execution = check_and_deliver(engine, db_session, product.id)
 
         assert execution.status.value == "success"  # the check itself succeeded
         notification = NotificationRepository(db_session).list_for_product(product.id)[0]
@@ -458,7 +472,7 @@ class TestDelivery:
         stub(load("jsonld_in_stock.html"))
         product = service.add(URL)
         alerts.add(product.id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "70000"})
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         working = RecordingProvider()
         report = NotificationService(
@@ -480,7 +494,7 @@ class TestDelivery:
         stub(load("jsonld_in_stock.html"))
         product = service.add(URL)
         alerts.add(product.id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "70000"})
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         notifier = NotificationService(db_session, get_settings(), providers=[broken])
         for _ in range(MAX_DELIVERY_ATTEMPTS + 2):
@@ -500,7 +514,7 @@ class TestDelivery:
         product = service.add(URL)
         alerts.add(product.id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "70000"})
 
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         notification = NotificationRepository(db_session).list_for_product(product.id)[0]
         assert notification.status is NotificationStatus.SUPPRESSED
@@ -526,7 +540,7 @@ class TestDelivery:
             notify_provider="webhook",
         )
 
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         assert len(webhook.sent) == 1
         assert console.sent == []
@@ -546,7 +560,7 @@ class TestDelivery:
         product = service.add(URL)
         alerts.add(product.id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "70000"})
 
-        engine.check_product(db_session, product.id)
+        check_and_deliver(engine, db_session, product.id)
 
         assert len(working.sent) == 1
         notification = NotificationRepository(db_session).list_for_product(product.id)[0]
@@ -585,3 +599,63 @@ class TestDedupeKey:
         assert build_dedupe_key(match, when=morning) == build_dedupe_key(
             match, when=morning + timedelta(hours=8)
         )
+
+
+class TestDedupeWindow:
+    """The suppression window is configurable; a day is only the default."""
+
+    def _match(self) -> RuleMatch:
+        return RuleMatch(
+            rule_id=1,
+            rule_type=RuleType.PRICE_DROPPED,
+            product_id=1,
+            title="t",
+            body="b",
+            context={"previous_price": "100", "current_price": "90"},
+        )
+
+    def test_same_window_is_one_key(self) -> None:
+        moment = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+
+        assert build_dedupe_key(self._match(), when=moment, window_seconds=3600) == (
+            build_dedupe_key(
+                self._match(), when=moment + timedelta(minutes=30), window_seconds=3600
+            )
+        )
+
+    def test_next_window_is_a_new_key(self) -> None:
+        moment = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+
+        assert build_dedupe_key(self._match(), when=moment, window_seconds=3600) != (
+            build_dedupe_key(
+                self._match(), when=moment + timedelta(hours=2), window_seconds=3600
+            )
+        )
+
+    def test_a_short_window_lets_a_repeat_alert_sooner(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The point of making it configurable: hourly prices need an hourly window."""
+        moment = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        an_hour_later = moment + timedelta(hours=1, minutes=1)
+
+        daily_same = build_dedupe_key(self._match(), when=moment, window_seconds=86400) == (
+            build_dedupe_key(self._match(), when=an_hour_later, window_seconds=86400)
+        )
+        hourly_same = build_dedupe_key(self._match(), when=moment, window_seconds=3600) == (
+            build_dedupe_key(self._match(), when=an_hour_later, window_seconds=3600)
+        )
+
+        assert daily_same is True
+        assert hourly_same is False
+
+    def test_the_setting_is_honoured(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from product_tracker.core.config import reset_settings_cache
+
+        monkeypatch.setenv("NOTIFICATION_DEDUPE_WINDOW_SECONDS", "3600")
+        reset_settings_cache()
+
+        service = NotificationService(db_session, get_settings(), providers=[])
+        assert service.settings.notification_dedupe_window_seconds == 3600

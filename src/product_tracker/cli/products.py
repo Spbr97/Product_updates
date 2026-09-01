@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Annotated
 
 import typer
@@ -11,8 +12,8 @@ from ..db.session import session_scope
 from ..domain.enums import CheckStatus, TrackingStatus
 from ..domain.errors import DuplicateError, NotFoundError, ValidationError
 from ..repositories.executions import CheckExecutionRepository
+from ..services.check_runner import run_check
 from ..services.product_service import ProductService
-from ..services.tracking import TrackingEngine
 from ..stores.registry import default_registry
 from ..utils.money import format_money
 from .formatting import ExitCode, error, info, stdout, success, table, warn
@@ -166,34 +167,36 @@ def remove(
 
 def check(product_id: Annotated[int, typer.Argument(help="Product ID.")]) -> None:
     """Check one product now and report what was found."""
-    settings = get_settings()
-    engine = TrackingEngine(default_registry(), settings)
-
     try:
-        with session_scope() as session:
-            execution = engine.check_product(session, product_id)
-            status = execution.status
-            price = format_money(execution.extracted_price, execution.extracted_currency)
-            availability = (
-                execution.availability_result.value if execution.availability_result else "unknown"
-            )
-            method = execution.fetch_method.value
-            detail = execution.error_detail
-            duration = execution.duration_ms
+        # Owns both transactions: the check, then delivery of anything it produced.
+        outcome = run_check(product_id, settings=get_settings(), registry=default_registry())
     except NotFoundError as exc:
         error(str(exc))
         raise typer.Exit(ExitCode.NOT_FOUND) from exc
 
+    status = outcome.status
     result = table(f"Check result for product {product_id}", ["Field", "Value"])
     result.add_row("status", _status_markup(status))
-    result.add_row("price", price)
-    result.add_row("availability", availability)
-    result.add_row("method", method)
-    result.add_row("duration", f"{duration} ms" if duration is not None else "-")
+    result.add_row(
+        "price",
+        format_money(Decimal(outcome.price) if outcome.price else None, outcome.currency),
+    )
+    result.add_row(
+        "availability", outcome.availability.value if outcome.availability else "unknown"
+    )
+    result.add_row("method", outcome.fetch_method.value)
+    result.add_row("attempts", str(outcome.attempts))
+    result.add_row(
+        "duration", f"{outcome.duration_ms} ms" if outcome.duration_ms is not None else "-"
+    )
+    if outcome.notifications_created:
+        result.add_row(
+            "alerts", f"{outcome.notifications_sent} sent of {outcome.notifications_created}"
+        )
     stdout.print(result)
 
-    if detail:
-        warn(detail)
+    if outcome.error_detail:
+        warn(outcome.error_detail)
 
     if status is CheckStatus.FAILED:
         # A store we could not read is a distinct condition from a crash: scripts branch

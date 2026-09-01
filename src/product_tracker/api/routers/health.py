@@ -22,6 +22,7 @@ from ...core.config import get_settings
 from ...core.security import is_auth_enabled
 from ...db.session import current_revision, get_session_factory, ping
 from ...notifications.registry import provider_status
+from ...scheduler import heartbeat
 from ...scheduler.status import scheduler_status
 from ..schemas.common import DependencyStatus, HealthResponse, ReadinessResponse
 
@@ -93,22 +94,22 @@ def _scheduler_status() -> DependencyStatus:
     except Exception as exc:
         return DependencyStatus(name="scheduler", healthy=False, detail=_short(exc))
     try:
+        settings = get_settings()
         state = scheduler_status(session)
+        liveness = heartbeat.read(
+            session, reconcile_interval_seconds=settings.reconcile_interval_seconds
+        )
     except Exception as exc:
         return DependencyStatus(name="scheduler", healthy=False, detail=_short(exc))
     finally:
         session.close()
 
-    running = state.worker_running
+    jobs = f"{state.product_jobs} product job(s)" if state.available else state.detail
     return DependencyStatus(
         name="scheduler",
-        # "Nothing scheduled" is not unhealthy: a fresh install has no products yet.
-        healthy=running is not False,
-        detail=(
-            f"{state.product_jobs} product job(s); {state.detail}"
-            if state.available
-            else state.detail
-        ),
+        # A worker that has never started is not unhealthy: a fresh install has none.
+        healthy=liveness.running is not False,
+        detail=f"{jobs}; {liveness.detail}",
     )
 
 

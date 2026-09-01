@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Annotated
 
 import typer
@@ -11,7 +12,7 @@ from ..db.session import session_scope
 from ..domain.enums import CheckStatus
 from ..repositories.products import ProductRepository
 from ..scheduler.runner import WorkerRunner, desired_schedule
-from ..services.tracking import TrackingEngine
+from ..services.check_runner import deliver_pending, run_check
 from ..stores.registry import default_registry
 from ..utils.money import format_money
 from .formatting import ExitCode, info, stdout, success, table, warn
@@ -60,7 +61,6 @@ def check_all(
     ongoing checking use ``product-tracker worker``.
     """
     settings = get_settings()
-    engine = TrackingEngine(default_registry(), settings)
 
     with session_scope() as session:
         product_ids = [p.id for p in ProductRepository(session).list_schedulable()][:limit]
@@ -72,15 +72,23 @@ def check_all(
     results = table(f"Checked {len(product_ids)} product(s)", ["Product", "Status", "Price"])
     failures = 0
     for product_id in product_ids:
-        with session_scope() as session:
-            execution = engine.check_product(session, product_id)
-            status = execution.status
-            price = format_money(execution.extracted_price, execution.extracted_currency)
-        if status is CheckStatus.FAILED:
+        # Deliver once at the end rather than after each product, so one slow provider
+        # does not stall the whole run.
+        outcome = run_check(
+            product_id, settings=settings, registry=default_registry(), deliver=False
+        )
+        if outcome.status is CheckStatus.FAILED:
             failures += 1
-        results.add_row(str(product_id), _status_markup(status), price)
+        results.add_row(
+            str(product_id),
+            _status_markup(outcome.status),
+            format_money(Decimal(outcome.price) if outcome.price else None, outcome.currency),
+        )
 
     stdout.print(results)
+    report = deliver_pending(settings)
+    if report.sent or report.failed:
+        info(f"alerts: {report.sent} sent, {report.failed} failed")
     if failures:
         warn(f"{failures} of {len(product_ids)} checks failed")
         raise typer.Exit(ExitCode.STORE_FAILURE)

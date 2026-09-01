@@ -76,19 +76,17 @@ class NotificationRepository(Repository[Notification]):
         )
         return list(self.session.execute(stmt).scalars())
 
-    def list_retryable(self, *, limit: int = 50) -> list[Notification]:
+    def list_retryable(
+        self, *, limit: int = 50, product_id: int | None = None
+    ) -> list[Notification]:
         """Pending or failed notifications still within their attempt budget."""
-        stmt = (
-            select(Notification)
-            .where(
-                Notification.status.in_(
-                    [NotificationStatus.PENDING, NotificationStatus.FAILED]
-                ),
-                Notification.attempts < MAX_DELIVERY_ATTEMPTS,
-            )
-            .order_by(Notification.id)
-            .limit(limit)
+        stmt = select(Notification).where(
+            Notification.status.in_([NotificationStatus.PENDING, NotificationStatus.FAILED]),
+            Notification.attempts < MAX_DELIVERY_ATTEMPTS,
         )
+        if product_id is not None:
+            stmt = stmt.where(Notification.product_id == product_id)
+        stmt = stmt.order_by(Notification.id).limit(limit)
         return list(self.session.execute(stmt).scalars())
 
     def mark_sent(self, notification: Notification, *, provider: str, when: datetime) -> None:

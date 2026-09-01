@@ -20,6 +20,7 @@ from ..core.logging import clear_context, get_logger
 from ..db.session import session_scope
 from ..domain.errors import NotFoundError
 from ..domain.models import CheckGuard
+from ..services.check_runner import run_check as run_check_and_deliver
 from ..services.tracking import TrackingEngine
 from ..stores.registry import default_registry
 
@@ -42,9 +43,12 @@ def build_engine() -> TrackingEngine:
 def run_check(product_id: int) -> None:
     """Check one product. Swallows everything; the outcome lives in the database."""
     try:
-        engine = build_engine()
-        with session_scope() as session:
-            engine.check_product(session, product_id)
+        run_check_and_deliver(
+            product_id,
+            settings=get_settings(),
+            registry=default_registry(),
+            guard=_GUARD,
+        )
     except NotFoundError:
         # The product was deleted between reconcile and this run. Not an error; the next
         # reconcile pass removes the job.
@@ -63,7 +67,7 @@ def retry_notifications(limit: int = 50) -> None:
 
     try:
         with session_scope() as session:
-            report = NotificationService(session, get_settings()).retry_pending(limit=limit)
+            report = NotificationService(session, get_settings()).deliver_pending(limit=limit)
         if report.sent or report.failed:
             log.info("notifications.retried", sent=report.sent, failed=report.failed)
     except Exception as exc:

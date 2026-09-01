@@ -368,3 +368,28 @@ class CheckExecution(Base):
     # credentials or full page bodies.
     error_type: Mapped[str | None] = mapped_column(String(64))
     error_detail: Mapped[str | None] = mapped_column(Text)
+
+
+class WorkerHeartbeat(Base):
+    """Proof that a worker process is alive.
+
+    Liveness used to be *inferred* from overdue jobs in the scheduler's store, which cannot
+    tell "no worker running" from "a worker running but wedged mid-check". A row the worker
+    touches on every reconcile answers it directly.
+
+    One row per worker process, keyed by a per-process id, so a restart replaces its own
+    row and a second worker is visible rather than hidden.
+    """
+
+    __tablename__ = "worker_heartbeats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    worker_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    hostname: Mapped[str | None] = mapped_column(String(255))
+    pid: Mapped[int | None] = mapped_column(Integer)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

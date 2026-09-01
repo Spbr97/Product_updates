@@ -4,9 +4,9 @@ The API and ``product-tracker status`` need to answer "is anything actually chec
 products?", and they run in different processes from the worker. The honest source is the
 job store itself: it is in PostgreSQL, so any process can read it.
 
-Worker liveness is *inferred*, not measured. If jobs exist but the earliest one is long
-overdue, nothing is running them. That is a reasonable signal and it is reported as an
-inference rather than a fact -- a dedicated heartbeat would be the way to know for certain.
+Worker liveness comes from the heartbeat table, which the worker touches on every
+reconcile -- so it is measured, not inferred. The job store still supplies what *work* is
+scheduled, which is a different question and equally worth reporting.
 """
 
 from __future__ import annotations

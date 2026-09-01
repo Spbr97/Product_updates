@@ -11,12 +11,13 @@ Keeping them apart is what makes delivery idempotent: the row exists before anyo
 to send it, so a crash between the two leaves a pending row rather than a silent loss.
 
 **Deduplication.** The key is a digest of product, rule, event type, a rule-type-specific
-signature (the price transition, or the resulting availability), and the UTC date. So:
+signature (the price transition, or the resulting availability), and a time bucket. So:
 
-* the same alert observed repeatedly on one day is delivered once;
-* the same transition happening again next week alerts again, because a price that drops
-  every Monday is news every Monday;
-* a rule's ``cooldown_seconds`` gives finer control when a day is the wrong granularity.
+* the same alert observed repeatedly within one window is delivered once;
+* the same transition in a later window alerts again, because a price that drops every
+  Monday is news every Monday;
+* the window is ``NOTIFICATION_DEDUPE_WINDOW_SECONDS`` (a day by default) -- shorten it for
+  volatile prices -- and a rule's ``cooldown_seconds`` is the per-rule equivalent.
 """
 
 from __future__ import annotations
@@ -53,19 +54,34 @@ class DeliveryReport:
     suppressed: int
 
 
-def build_dedupe_key(match: RuleMatch, *, when: datetime) -> str:
-    """A stable digest identifying this alert on this day.
+#: Default suppression window, matching ``Settings.notification_dedupe_window_seconds``.
+DEFAULT_DEDUPE_WINDOW_SECONDS = 86_400
 
-    Hashed rather than concatenated so the column has a bounded length regardless of how
-    long a signature grows.
+
+def build_dedupe_key(
+    match: RuleMatch,
+    *,
+    when: datetime,
+    window_seconds: int = DEFAULT_DEDUPE_WINDOW_SECONDS,
+) -> str:
+    """A stable digest identifying this alert within one suppression window.
+
+    The window is a bucket over absolute time, not a calendar day: two observations in the
+    same bucket share a key and so alert once, and the next bucket alerts again. Bucketing
+    rather than "time since last alert" keeps the key a pure function of the observation,
+    which is what lets a UNIQUE constraint enforce it without a read-then-write race.
+
+    Hashed rather than concatenated so the column has a bounded length however long a
+    signature grows.
     """
+    bucket = int(when.astimezone(UTC).timestamp() // max(1, window_seconds))
     parts = "|".join(
         [
             str(match.product_id),
             str(match.rule_id),
             match.rule_type.value,
             dedupe_signature(match),
-            when.astimezone(UTC).strftime("%Y-%m-%d"),
+            str(bucket),
         ]
     )
     return hashlib.sha256(parts.encode("utf-8")).hexdigest()
@@ -93,7 +109,11 @@ class NotificationService:
     def record(self, match: RuleMatch, *, when: datetime | None = None) -> Notification | None:
         """Persist the decision to alert. ``None`` when this alert already exists."""
         moment = when or datetime.now(UTC)
-        dedupe_key = build_dedupe_key(match, when=moment)
+        dedupe_key = build_dedupe_key(
+            match,
+            when=moment,
+            window_seconds=self.settings.notification_dedupe_window_seconds,
+        )
 
         notification = self.repo.create_if_new(
             product_id=match.product_id,
@@ -184,8 +204,20 @@ class NotificationService:
         )
         return False
 
+    def record_all(self, matches: list[RuleMatch], *, when: datetime | None = None) -> int:
+        """Record a batch of matches without sending anything.
+
+        Returns how many were new. Callers deliver afterwards, in their own transaction.
+        """
+        return sum(1 for match in matches if self.record(match, when=when) is not None)
+
     def dispatch(self, matches: list[RuleMatch], *, when: datetime | None = None) -> DeliveryReport:
-        """Record and deliver a batch of matches."""
+        """Record and deliver in one go.
+
+        Convenient for tests and one-off scripts. Production paths use ``record_all``
+        followed by ``deliver_pending`` so that delivery is outside the check's
+        transaction.
+        """
         created = sent = failed = suppressed = 0
 
         for match in matches:
@@ -203,9 +235,11 @@ class NotificationService:
             created=created, sent=sent, failed=failed, suppressed=suppressed
         )
 
-    def retry_pending(self, *, limit: int = 50) -> DeliveryReport:
-        """Attempt delivery again for rows left pending or failed by an earlier pass."""
-        rows = self.repo.list_retryable(limit=limit)
+    def deliver_pending(
+        self, *, limit: int = 50, product_id: int | None = None
+    ) -> DeliveryReport:
+        """Deliver rows left pending, or failed by an earlier pass and still retryable."""
+        rows = self.repo.list_retryable(limit=limit, product_id=product_id)
         sent = failed = 0
         for notification in rows:
             if self.deliver(notification):
@@ -213,6 +247,9 @@ class NotificationService:
             else:
                 failed += 1
         return DeliveryReport(created=0, sent=sent, failed=failed, suppressed=0)
+
+    #: Kept as the name the worker's retry job uses.
+    retry_pending = deliver_pending
 
     def _providers_for(self, notification: Notification) -> list[NotificationProvider]:
         """Honour the rule's provider preference, falling back to all active providers.

@@ -11,9 +11,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, status
 
+from ...db.models import CheckExecution
 from ...domain.enums import TrackingStatus
+from ...services.check_runner import run_check
 from ...services.product_service import ProductService
-from ...services.tracking import TrackingEngine
 from ...stores.registry import default_registry
 from ..deps import Config, DbSession, PageParams, RequireWrite
 from ..schemas.common import ErrorResponse, Page
@@ -102,7 +103,8 @@ def check_product(product_id: int, session: DbSession, settings: Config) -> Chec
     ``error_type``. Returning 502 here would conflate "we could not reach the store" with
     "this API is broken".
     """
-    engine = TrackingEngine(default_registry(), settings)
-    execution = engine.check_product(session, product_id)
-    session.flush()
+    # Runs in its own transactions, so notification delivery never holds this request's
+    # database session open while an SMTP server or webhook takes its time.
+    outcome = run_check(product_id, settings=settings, registry=default_registry())
+    execution = session.get(CheckExecution, outcome.execution_id)
     return CheckResponse.model_validate(execution)

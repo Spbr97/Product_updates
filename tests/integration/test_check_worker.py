@@ -291,3 +291,127 @@ class TestExecutionRepository:
     def test_latest_is_none_without_checks(self, db_session: Session) -> None:
         assert CheckExecutionRepository(db_session).latest_for_product(999_999) is None
 
+
+
+class TestDeliveryIsOutsideTheCheckTransaction:
+    """Recording and delivering are separate transactions.
+
+    Delivery talks to SMTP servers and webhooks; holding the check's transaction open
+    across that would pin a connection for as long as the slowest provider takes.
+    """
+
+    def test_the_engine_records_but_does_not_send(self, clean_db: None) -> None:
+        from tests.integration.test_alerts import RecordingProvider
+
+        from product_tracker.repositories.notifications import NotificationRepository
+        from product_tracker.services.alert_service import AlertService
+        from product_tracker.services.tracking import TrackingEngine
+
+        respx.get(URL).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))
+        product_id = add_committed()
+        with session_scope() as session:
+            AlertService(session).add(
+                product_id,
+                __import__(
+                    "product_tracker.domain.enums", fromlist=["RuleType"]
+                ).RuleType.PRICE_BELOW_TARGET,
+                params={"target_price": "99999"},
+            )
+
+        provider = RecordingProvider()
+        engine = TrackingEngine(StoreRegistry(), get_settings(), providers=[provider])
+        with session_scope() as session:
+            execution = engine.check_product(session, product_id)
+            created = execution.notifications_created
+
+        assert created == 1
+        assert provider.sent == []  # recorded, not sent
+
+        with session_scope() as session:
+            pending = NotificationRepository(session).list_retryable()
+        assert len(pending) == 1
+
+    def test_run_check_records_then_delivers(self, clean_db: None) -> None:
+        from tests.integration.test_alerts import RecordingProvider
+
+        from product_tracker.domain.enums import NotificationStatus, RuleType
+        from product_tracker.repositories.notifications import NotificationRepository
+        from product_tracker.services.alert_service import AlertService
+        from product_tracker.services.check_runner import run_check
+
+        respx.get(URL).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))
+        product_id = add_committed()
+        with session_scope() as session:
+            AlertService(session).add(
+                product_id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "99999"}
+            )
+
+        provider = RecordingProvider()
+        outcome = run_check(
+            product_id,
+            settings=get_settings(),
+            registry=StoreRegistry(),
+            providers=[provider],
+        )
+
+        assert outcome.notifications_created == 1
+        assert outcome.notifications_sent == 1
+        assert len(provider.sent) == 1
+        with session_scope() as session:
+            rows = NotificationRepository(session).list_for_product(product_id)
+        assert rows[0].status is NotificationStatus.SENT
+
+    def test_a_provider_failure_leaves_the_check_successful(self, clean_db: None) -> None:
+        """The observation is committed before delivery is attempted."""
+        from tests.integration.test_alerts import RecordingProvider
+
+        from product_tracker.domain.enums import RuleType
+        from product_tracker.services.alert_service import AlertService
+        from product_tracker.services.check_runner import run_check
+
+        respx.get(URL).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))
+        product_id = add_committed()
+        with session_scope() as session:
+            AlertService(session).add(
+                product_id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "99999"}
+            )
+
+        outcome = run_check(
+            product_id,
+            settings=get_settings(),
+            registry=StoreRegistry(),
+            providers=[RecordingProvider(fail=True)],
+        )
+
+        assert outcome.status.value == "success"
+        assert outcome.notifications_created == 1
+        assert outcome.notifications_sent == 0
+
+    def test_deliver_false_records_only(self, clean_db: None) -> None:
+        from tests.integration.test_alerts import RecordingProvider
+
+        from product_tracker.domain.enums import RuleType
+        from product_tracker.services.alert_service import AlertService
+        from product_tracker.services.check_runner import deliver_pending, run_check
+
+        respx.get(URL).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))
+        product_id = add_committed()
+        with session_scope() as session:
+            AlertService(session).add(
+                product_id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "99999"}
+            )
+
+        provider = RecordingProvider()
+        run_check(
+            product_id,
+            settings=get_settings(),
+            registry=StoreRegistry(),
+            providers=[provider],
+            deliver=False,
+        )
+        assert provider.sent == []
+
+        report = deliver_pending(get_settings(), providers=[provider])
+
+        assert report.sent == 1
+        assert len(provider.sent) == 1

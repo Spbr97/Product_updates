@@ -113,6 +113,17 @@ class Settings(BaseSettings):
 
     # --- Notifications ----------------------------------------------------------
     notify_default_providers: str = "console"
+    notification_dedupe_window_seconds: int = Field(
+        default=86_400,
+        ge=60,
+        le=30 * 86_400,
+        description=(
+            "How long the same alert is suppressed for. One day by default: the same "
+            "observation on one day alerts once, and the same transition next week alerts "
+            "again. Shorten it for volatile prices; a rule's cooldown_seconds is the "
+            "per-rule equivalent."
+        ),
+    )
     notification_timeout_seconds: int = Field(
         default=10,
         ge=1,
