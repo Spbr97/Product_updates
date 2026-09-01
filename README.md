@@ -40,6 +40,30 @@ adding a module, not editing the tracking engine.
 store cannot be read, the check is recorded as failed with the reason. It never invents a
 price.
 
+### Verified against live retailers
+
+Checked against a real product (Apple iPhone 17, 256 GB) on 2026-09-01, over plain HTTP
+with no browser:
+
+| Retailer | Result | Extraction path |
+|---|---|---|
+| Flipkart | ✅ ₹82,900 · in stock | schema.org JSON-LD |
+| Vijay Sales | ✅ ₹82,900 · in stock | generic adapter |
+| Reliance Digital | ✅ ₹82,900 · in stock | generic adapter |
+| BigBasket | ✅ ₹82,900 · availability *unknown* | labelled text |
+| Croma | ❌ `blocked` (HTTP 403) | — |
+
+Notes on the two that are not a plain ✅:
+
+- **BigBasket publishes no availability signal at all** — no JSON-LD, no OpenGraph, and the
+  only hint is an "Add to Basket" string, which is present on out-of-stock pages too. The
+  honest answer is `unknown`, so that is what is recorded.
+- **Croma blocks automated access at the edge.** It returns a 326-byte "Access Denied" page
+  to a real headless Chromium as well as to plain HTTP, so this is not a user-agent filter
+  and the browser fallback does not help. Getting past it would require IP rotation or
+  fingerprint spoofing; this project does not do that. Croma is recorded as `blocked` and
+  its circuit breaker backs it off.
+
 ## 2. Architecture
 
 ```

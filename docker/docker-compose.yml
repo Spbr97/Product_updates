@@ -1,11 +1,14 @@
 # Local development stack.
 #
-#   docker compose -f docker/docker-compose.yml up -d db
-#   docker compose -f docker/docker-compose.yml run --rm migrate
-#   docker compose -f docker/docker-compose.yml up api
+#   docker compose -f docker/docker-compose.yml up -d
 #
-# The worker service is behind a profile until the scheduler lands (phase 5):
-#   docker compose -f docker/docker-compose.yml --profile worker up
+# Brings up PostgreSQL, applies migrations, then starts the API and the worker. Startup is
+# ordered by healthchecks, so nothing runs against a database that is not ready or a schema
+# that has not been migrated.
+#
+#   docker compose -f docker/docker-compose.yml logs -f worker
+#   docker compose -f docker/docker-compose.yml run --rm migrate
+#   docker compose -f docker/docker-compose.yml down -v      # -v also drops the data
 
 name: product-tracker
 
@@ -13,11 +16,15 @@ x-app: &app
   build:
     context: ..
     dockerfile: docker/Dockerfile
-  environment:
+  environment: &app-env
     DATABASE_URL: postgresql+psycopg://tracker:tracker@db:5432/tracker
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
     LOG_FORMAT: ${LOG_FORMAT:-json}
+    # The lean image has no browser. Build with EXTRAS=browser and the Playwright base
+    # image to enable it; see docker/Dockerfile.
     PLAYWRIGHT_ENABLED: ${PLAYWRIGHT_ENABLED:-false}
+    API_KEY: ${API_KEY:-}
+    NOTIFY_DEFAULT_PROVIDERS: ${NOTIFY_DEFAULT_PROVIDERS:-console}
   depends_on:
     db:
       condition: service_healthy
@@ -34,6 +41,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tracker -d tracker"]
       interval: 5s
@@ -41,7 +49,7 @@ services:
       retries: 10
       start_period: 10s
 
-  # One-shot: bring the schema up to head, then exit. Run it before api/worker.
+  # One-shot: bring the schema to head, then exit. api and worker wait for it to succeed.
   migrate:
     <<: *app
     command: ["alembic", "upgrade", "head"]
@@ -59,12 +67,15 @@ services:
       - "8000"
     ports:
       - "${API_PORT:-8000}:8000"
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
     healthcheck:
+      # Liveness, not readiness: the container should not be restarted because the
+      # database blipped.
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
       interval: 15s
       timeout: 5s
@@ -73,13 +84,25 @@ services:
 
   worker:
     <<: *app
-    profiles: ["worker"]
     command: ["product-tracker", "worker"]
+    restart: unless-stopped
+    # Exactly one. APScheduler's job store has no cross-process locking, so a second
+    # worker would run every job a second time.
+    deploy:
+      replicas: 1
     depends_on:
       db:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      # No HTTP port to probe, so ask the application: `status` exits non-zero when the
+      # database is unreachable or unmigrated.
+      test: ["CMD-SHELL", "product-tracker status > /dev/null || exit 1"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 20s
 
 volumes:
   pgdata:

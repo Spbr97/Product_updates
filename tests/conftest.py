@@ -157,6 +157,9 @@ _DATA_TABLES = (
     "price_history",
     "check_executions",
     "products",
+    # Scheduler jobs too: a test that inspects the job store would otherwise leave rows
+    # that make a later test believe a worker is scheduled.
+    "apscheduler_jobs",
 )
 
 

@@ -14,7 +14,7 @@ from ..core.logging import get_logger
 from ..domain.enums import FetchOutcome
 from ..domain.errors import InvalidURLError, UnsafeURLError
 from ..domain.models import FetchContext
-from ..utils.urls import assert_public_host, host_of
+from ..utils.urls import assert_public_host, host_of, redact_urls
 from .http import FetchFailure, FetchSuccess
 
 log = get_logger(__name__)
@@ -89,5 +89,9 @@ def render(
 
 
 def _brief(exc: Exception) -> str:
-    """First line only: Playwright errors are long and can embed the full URL."""
-    return f"{type(exc).__name__}: {str(exc).split(chr(10), 1)[0][:120]}"
+    """First line only, with URLs reduced to their host.
+
+    Playwright errors are long and routinely quote the URL that was being loaded.
+    """
+    text = redact_urls(str(exc).split(chr(10), 1)[0])
+    return f"{type(exc).__name__}: {text[:120]}"

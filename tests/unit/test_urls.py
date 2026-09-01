@@ -8,6 +8,7 @@ from product_tracker.domain.errors import InvalidURLError, UnsafeURLError
 from product_tracker.utils.urls import (
     canonicalize_url,
     host_of,
+    redact_urls,
     validate_url,
 )
 
@@ -175,3 +176,41 @@ class TestHostOf:
     )
     def test_extracts_lowercase_host(self, url: str, expected: str) -> None:
         assert host_of(url) == expected
+
+
+class TestRedactUrls:
+    """Error text from HTTP clients is stored in the database and written to logs."""
+
+    def test_strips_the_query_string(self) -> None:
+        assert redact_urls("failed loading https://shop.test/p/1?token=SECRET") == (
+            "failed loading https://shop.test/..."
+        )
+
+    def test_strips_embedded_credentials(self) -> None:
+        """validate_url refuses these, but a redirect chain can still produce one."""
+        result = redact_urls("connecting to https://user:hunter2@shop.test/p/1")
+
+        assert "hunter2" not in result
+        assert "user" not in result
+        assert "shop.test" in result
+
+    def test_keeps_the_host_for_diagnosis(self) -> None:
+        assert "shop.test" in redact_urls("timeout for https://shop.test/p/1?a=b")
+
+    def test_handles_several_urls(self) -> None:
+        result = redact_urls("https://a.test/x?k=1 redirected to https://b.test/y?k=2")
+
+        assert "k=1" not in result
+        assert "k=2" not in result
+        assert "a.test" in result
+        assert "b.test" in result
+
+    def test_leaves_text_without_urls_alone(self) -> None:
+        assert redact_urls("connection reset by peer") == "connection reset by peer"
+
+    def test_handles_a_bare_host(self) -> None:
+        assert redact_urls("https://shop.test") == "https://shop.test/..."
+
+    @pytest.mark.parametrize("scheme", ["http", "https", "HTTPS"])
+    def test_both_schemes_and_any_case(self, scheme: str) -> None:
+        assert "SECRET" not in redact_urls(f"{scheme}://shop.test/p?token=SECRET")

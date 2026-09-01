@@ -24,7 +24,7 @@ from ..core.logging import get_logger
 from ..domain.enums import Availability, FetchMethod, FetchOutcome
 from ..domain.errors import InvalidURLError, UnsafeURLError
 from ..domain.models import FetchContext, FetchResult
-from ..utils.urls import assert_public_host, host_of
+from ..utils.urls import assert_public_host, host_of, redact_urls
 
 log = get_logger(__name__)
 
@@ -197,10 +197,12 @@ def failure_to_result(failure: FetchFailure, method: FetchMethod) -> FetchResult
 
 
 def _brief(exc: Exception) -> str:
-    """A short description with no URL in it.
+    """A short description with the identifying part of any URL removed.
 
-    httpx puts the full URL in some messages, and a URL can carry query-string secrets, so
-    only the exception type and a truncated message are surfaced.
+    httpx embeds the request URL in several of its messages, and a URL can carry a token in
+    its query string or credentials in its userinfo. This text is stored in
+    ``check_executions.error_detail`` and written to logs, so it is reduced to scheme and
+    host before it goes anywhere.
     """
-    text = str(exc).split("\n", 1)[0]
+    text = redact_urls(str(exc).split("\n", 1)[0])
     return f"{type(exc).__name__}: {text[:120]}" if text else type(exc).__name__

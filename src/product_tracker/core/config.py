@@ -164,6 +164,19 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("api_key", "smtp_password", "telegram_bot_token", mode="before")
+    @classmethod
+    def _blank_secret_is_unset(cls, value: object) -> object:
+        """Treat an empty or whitespace-only secret as absent.
+
+        ``API_KEY=`` in a .env file, and Docker Compose's ``${API_KEY:-}`` when the
+        variable is not exported, both arrive as an empty string. Without this, that reads
+        as "auth enabled with a key nothing can match" and silently locks out every write.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("allowed_url_schemes")
     @classmethod
     def _known_schemes(cls, value: str) -> str:

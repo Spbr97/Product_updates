@@ -61,3 +61,28 @@ class TestAuthEnabled:
     def test_the_key_is_not_exposed_by_repr(self) -> None:
         """SecretStr keeps the value out of logs and tracebacks."""
         assert KEY not in repr(settings(api_key=KEY).api_key)
+
+
+class TestBlankSecrets:
+    """`API_KEY=` in .env, and Compose's `${API_KEY:-}`, both arrive as an empty string."""
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t"])
+    def test_a_blank_key_means_auth_is_off(self, blank: str) -> None:
+        instance = settings(api_key=blank)
+
+        assert instance.api_key is None
+        assert not is_auth_enabled(instance)
+
+    def test_a_blank_key_does_not_lock_writes_out(self) -> None:
+        """The failure mode this prevents: auth on, with a key nothing can match."""
+        assert verify_api_key(settings(api_key=""), None)
+
+    @pytest.mark.parametrize(
+        "field", ["smtp_password", "telegram_bot_token"]
+    )
+    def test_other_blank_secrets_are_also_unset(self, field: str) -> None:
+        instance = settings(**{field: ""})
+        assert getattr(instance, field) is None
+
+    def test_a_real_key_still_works(self) -> None:
+        assert is_auth_enabled(settings(api_key=KEY))

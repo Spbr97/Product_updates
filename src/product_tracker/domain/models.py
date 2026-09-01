@@ -183,15 +183,15 @@ class GuardDecision:
 class CheckGuard(Protocol):
     """Paces outgoing requests and can veto a check.
 
-    Implemented by the worker's per-store throttle and circuit breaker. Declared here so
+    Implemented by the worker's per-host throttle and circuit breaker. Declared here so
     the tracking engine can consult one without importing the scheduler -- dependencies
     point inward, and the engine is inward of the scheduler.
     """
 
-    def before(self, store_slug: str) -> GuardDecision:
+    def before(self, host: str) -> GuardDecision:
         """Called before a fetch. May block to honour a rate limit."""
         ...
 
-    def after(self, store_slug: str, *, succeeded: bool) -> None:
+    def after(self, host: str, *, succeeded: bool) -> None:
         """Called after a fetch, with its outcome."""
         ...

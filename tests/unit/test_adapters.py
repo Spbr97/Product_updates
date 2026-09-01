@@ -323,3 +323,179 @@ class TestStatusMapping:
             else FetchResult(outcome=outcome)
         )
         assert _status_for(result) is expected
+
+
+class TestBrowserFallback:
+    """The generic and Flipkart adapters both fall back to rendering.
+
+    ``stores.browser.render`` is stubbed: what matters here is *when* the adapters reach
+    for it and what they do with the answer, not Chromium.
+    """
+
+    @pytest.fixture
+    def allow_browser(self) -> FetchContext:
+        return FetchContext(timeout_seconds=5, allow_browser=True, verify_public_host=False)
+
+    def _stub_render(
+        self, monkeypatch: pytest.MonkeyPatch, module: object, result: object
+    ) -> list[str]:
+        calls: list[str] = []
+
+        def fake_render(url: str, _ctx: FetchContext, **_kwargs: object) -> object:
+            calls.append(url)
+            return result
+
+        monkeypatch.setattr(module, "render", fake_render)
+        return calls
+
+    def test_generic_renders_when_http_finds_no_product(
+        self,
+        generic: GenericStoreAdapter,
+        allow_browser: FetchContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from product_tracker.stores import browser as browser_module
+        from product_tracker.stores.http import FetchSuccess
+
+        stub("https://shop.test/js", html="<html><body>loading...</body></html>")
+        calls = self._stub_render(
+            monkeypatch,
+            browser_module,
+            FetchSuccess(
+                html=load("jsonld_in_stock.html"), url="https://shop.test/js", http_status=200
+            ),
+        )
+
+        result = generic.fetch_product("https://shop.test/js", allow_browser)
+
+        assert calls == ["https://shop.test/js"]
+        assert result.outcome is FetchOutcome.OK
+        assert result.fetch_method is FetchMethod.BROWSER
+
+    def test_generic_does_not_render_when_http_succeeds(
+        self,
+        generic: GenericStoreAdapter,
+        allow_browser: FetchContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Rendering costs an order of magnitude more; only reach for it when needed."""
+        from product_tracker.stores import browser as browser_module
+        from product_tracker.stores.http import FetchSuccess
+
+        stub("https://shop.test/ok", html=load("jsonld_in_stock.html"))
+        calls = self._stub_render(
+            monkeypatch, browser_module, FetchSuccess(html="", url="", http_status=200)
+        )
+
+        generic.fetch_product("https://shop.test/ok", allow_browser)
+
+        assert calls == []
+
+    @pytest.mark.parametrize("status", [403, 404])
+    def test_generic_does_not_render_a_block_or_a_missing_listing(
+        self,
+        generic: GenericStoreAdapter,
+        allow_browser: FetchContext,
+        monkeypatch: pytest.MonkeyPatch,
+        status: int,
+    ) -> None:
+        """Both are real answers; re-fetching would neither change them nor be polite."""
+        from product_tracker.stores import browser as browser_module
+        from product_tracker.stores.http import FetchSuccess
+
+        stub("https://shop.test/no", status=status)
+        calls = self._stub_render(
+            monkeypatch, browser_module, FetchSuccess(html="", url="", http_status=200)
+        )
+
+        generic.fetch_product("https://shop.test/no", allow_browser)
+
+        assert calls == []
+
+    def test_generic_reports_both_failures_when_rendering_also_fails(
+        self,
+        generic: GenericStoreAdapter,
+        allow_browser: FetchContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from product_tracker.stores import browser as browser_module
+        from product_tracker.stores.http import FetchFailure
+
+        stub("https://shop.test/js2", status=503)
+        self._stub_render(
+            monkeypatch,
+            browser_module,
+            FetchFailure(FetchOutcome.ERROR, "chromium is not installed"),
+        )
+
+        result = generic.fetch_product("https://shop.test/js2", allow_browser)
+
+        assert not result.succeeded
+        assert "browser fallback also failed" in (result.message or "")
+        assert "chromium is not installed" in (result.message or "")
+
+    def test_flipkart_renders_when_selectors_find_no_price(
+        self,
+        flipkart: FlipkartAdapter,
+        allow_browser: FetchContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from product_tracker.stores import browser as browser_module
+        from product_tracker.stores.http import FetchSuccess
+
+        url = "https://www.flipkart.com/p/itm-js"
+        stub(url, html=load("flipkart_no_price.html"))
+        calls = self._stub_render(
+            monkeypatch,
+            browser_module,
+            FetchSuccess(html=load("flipkart_product.html"), url=url, http_status=200),
+        )
+
+        result = flipkart.fetch_product(url, allow_browser)
+
+        assert calls == [url]
+        assert result.outcome is FetchOutcome.OK
+        assert result.price == Decimal("69999")
+
+    def test_no_rendering_when_the_browser_is_disabled(
+        self, generic: GenericStoreAdapter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from product_tracker.stores import browser as browser_module
+        from product_tracker.stores.http import FetchSuccess
+
+        stub("https://shop.test/off", html="<html><body>nothing</body></html>")
+        calls = self._stub_render(
+            monkeypatch, browser_module, FetchSuccess(html="", url="", http_status=200)
+        )
+
+        result = generic.fetch_product("https://shop.test/off", CTX)
+
+        assert calls == []
+        assert result.outcome is FetchOutcome.PAGE_STRUCTURE
+
+
+class TestRegistryLookup:
+    def test_get_by_slug(self) -> None:
+        assert StoreRegistry().get("flipkart").slug == "flipkart"
+
+    def test_unknown_slug_raises(self) -> None:
+        from product_tracker.domain.errors import NoAdapterError
+
+        with pytest.raises(NoAdapterError, match="no adapter registered"):
+            StoreRegistry().get("does-not-exist")
+
+    def test_a_url_with_no_host_has_no_adapter(self) -> None:
+        """Even the fallback needs something to fetch."""
+        from product_tracker.domain.errors import NoAdapterError
+
+        with pytest.raises(NoAdapterError):
+            StoreRegistry().resolve("not-a-url")
+
+    def test_adapters_are_ordered_fallback_last(self) -> None:
+        slugs = [adapter.slug for adapter in StoreRegistry().adapters]
+        assert slugs[-1] == "generic"
+
+    def test_store_info_round_trips(self) -> None:
+        info = StoreRegistry().get("flipkart").store_info()
+        assert info.slug == "flipkart"
+        assert info.is_fallback is False

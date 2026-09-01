@@ -16,6 +16,7 @@ trivially testable and usable from anywhere.
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -210,3 +211,24 @@ def host_of(url: str) -> str:
         return (urlsplit(url).hostname or "").lower()
     except ValueError:
         return ""
+
+
+#: Matches a URL: scheme, optional userinfo, host, then everything else.
+_URL_PATTERN = re.compile(
+    r"(https?://)(?:[^\s/?#@]*@)?([^\s/?#]+)(\S*)", re.IGNORECASE
+)
+
+
+def redact_urls(text: str) -> str:
+    """Reduce any URL in a string to scheme and host.
+
+    Exception messages from HTTP clients and browsers routinely embed the request URL, and
+    a URL can carry a session token in its query string or credentials in its userinfo.
+    These messages are persisted in ``check_executions.error_detail`` and written to logs,
+    so everything identifying goes and the host -- the useful part for diagnosis -- stays.
+
+    Userinfo is dropped rather than kept with the host: ``validate_url`` refuses URLs with
+    embedded credentials, but a redirect chain or a third-party error string can still
+    produce one, and this is the last place to catch it.
+    """
+    return _URL_PATTERN.sub(lambda match: f"{match.group(1)}{match.group(2)}/...", text)

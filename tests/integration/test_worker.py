@@ -136,12 +136,14 @@ class TestRetry:
 
 
 class TestGuardIntegration:
+    """The guard keys on the host; these seed it with the host under test."""
+
     def test_an_open_circuit_skips_the_check(
         self, service: ProductService, db_session: Session
     ) -> None:
         clock = FakeClock()
         guard = make_guard(clock, RecordingSleeper(clock), threshold=1)
-        guard.after("generic", succeeded=False)
+        guard.after("shop.example.com", succeeded=False)
         engine = TrackingEngine(StoreRegistry(), get_settings(), guard=guard)
         product = service.add(URL)
 
@@ -156,7 +158,7 @@ class TestGuardIntegration:
     ) -> None:
         clock = FakeClock()
         guard = make_guard(clock, RecordingSleeper(clock), threshold=1)
-        guard.after("generic", succeeded=False)
+        guard.after("shop.example.com", succeeded=False)
         engine = TrackingEngine(StoreRegistry(), get_settings(), guard=guard)
         route = respx.get(URL).mock(return_value=httpx.Response(200))
         product = service.add(URL)
@@ -171,7 +173,7 @@ class TestGuardIntegration:
         """Nothing was attempted, so the product's failure streak must not grow."""
         clock = FakeClock()
         guard = make_guard(clock, RecordingSleeper(clock), threshold=1)
-        guard.after("generic", succeeded=False)
+        guard.after("shop.example.com", succeeded=False)
         engine = TrackingEngine(StoreRegistry(), get_settings(), guard=guard)
         product = service.add(URL)
 
@@ -191,7 +193,7 @@ class TestGuardIntegration:
 
         engine.check_product(db_session, product.id)
 
-        assert guard.snapshot()["generic"]["circuit_open"] is True
+        assert guard.snapshot()["shop.example.com"]["circuit_open"] is True
 
     def test_no_guard_means_no_skipping(
         self, service: ProductService, db_session: Session
@@ -389,3 +391,76 @@ class TestAPSchedulerQueue:
         job = queue.scheduler.get_job(NOTIFICATION_RETRY_JOB_ID)
         assert job is not None
         assert job.next_run_time is not None
+
+
+class TestGuardIsolatesHosts:
+    """Several real retailers share the generic adapter.
+
+    Found by running against five live Indian retailers at once: Croma hard-blocks
+    automated access, and because the guard keyed on the *adapter slug*, its failures
+    opened a circuit under "generic" -- which would have skipped Vijay Sales, BigBasket
+    and Reliance Digital too. The guard keys on the host now.
+    """
+
+    def _engine(self, guard: object) -> TrackingEngine:
+        return TrackingEngine(
+            StoreRegistry(), get_settings(), guard=guard, sleeper=NoSleep()
+        )
+
+    def test_a_blocked_host_does_not_skip_a_healthy_one(
+        self, service: ProductService, db_session: Session
+    ) -> None:
+        clock = FakeClock()
+        guard = make_guard(clock, RecordingSleeper(clock), threshold=1, min_interval=0)
+        engine = self._engine(guard)
+
+        blocked_url = "https://blocked.example.com/p/1"
+        healthy_url = "https://healthy.example.com/p/1"
+        respx.get(blocked_url).mock(return_value=httpx.Response(403))
+        respx.get(healthy_url).mock(
+            return_value=httpx.Response(200, html=load("jsonld_in_stock.html"))
+        )
+        blocked = service.add(blocked_url)
+        healthy = service.add(healthy_url)
+        # Both resolve to the same adapter -- that is the whole point.
+        assert blocked.store.slug == healthy.store.slug == "generic"
+
+        engine.check_product(db_session, blocked.id)  # opens the circuit for its host
+        assert not guard.before("blocked.example.com").proceed
+
+        execution = engine.check_product(db_session, healthy.id)
+
+        assert execution.status is CheckStatus.SUCCESS
+
+    def test_the_circuit_is_recorded_against_the_host(
+        self, service: ProductService, db_session: Session
+    ) -> None:
+        clock = FakeClock()
+        guard = make_guard(clock, RecordingSleeper(clock), threshold=1, min_interval=0)
+        url = "https://blocked.example.com/p/2"
+        respx.get(url).mock(return_value=httpx.Response(403))
+        product = service.add(url)
+
+        self._engine(guard).check_product(db_session, product.id)
+
+        snapshot = guard.snapshot()
+        assert "blocked.example.com" in snapshot
+        assert "generic" not in snapshot
+
+    def test_throttling_is_per_host_not_per_adapter(
+        self, service: ProductService, db_session: Session
+    ) -> None:
+        """Four unrelated retailers must not queue behind one 5-second bucket."""
+        clock = FakeClock()
+        sleeper = RecordingSleeper(clock)
+        guard = make_guard(clock, sleeper, min_interval=5.0, threshold=99)
+        engine = self._engine(guard)
+
+        for host in ("one.example.com", "two.example.com", "three.example.com"):
+            url = f"https://{host}/p/1"
+            respx.get(url).mock(
+                return_value=httpx.Response(200, html=load("jsonld_in_stock.html"))
+            )
+            engine.check_product(db_session, service.add(url).id)
+
+        assert sleeper.slept == []

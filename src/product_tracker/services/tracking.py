@@ -116,6 +116,10 @@ class TrackingEngine:
         store_id = product.store_id
         store_slug = product.store.slug if product.store else None
         url = product.url
+        # The guard keys on the HOST, not the adapter slug. Several unrelated retailers
+        # share the generic adapter, so keying on the slug would put them in one throttle
+        # bucket -- and let one blocked site open a circuit that skips all the others.
+        guard_key = host_of(url) or (store_slug or "")
 
         bind_context(product_id=product_id, store=store_slug, url_host=host_of(url))
         log.info(EVENT_CHECK_STARTED, url_host=host_of(url))
@@ -126,7 +130,7 @@ class TrackingEngine:
         # The guard paces outgoing requests and can veto the check outright. A one-shot
         # CLI or API check passes no guard: there is nothing to pace.
         if self.guard is not None:
-            decision = self.guard.before(store_slug or "")
+            decision = self.guard.before(guard_key)
             if not decision.proceed:
                 execution = self._record_skipped(
                     session=session,
@@ -143,7 +147,7 @@ class TrackingEngine:
         result, attempts = self._fetch_with_retry(url)
 
         if self.guard is not None:
-            self.guard.after(store_slug or "", succeeded=result.succeeded)
+            self.guard.after(guard_key, succeeded=result.succeeded)
 
         duration_ms = int((time.monotonic() - began) * 1000)
         execution = self._record(
