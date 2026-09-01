@@ -18,6 +18,7 @@ from ..domain.enums import TrackingStatus
 from ..domain.errors import DuplicateError, NotFoundError
 from ..repositories.products import ProductRepository
 from ..repositories.stores import StoreRepository
+from ..stores.catalogue import resolve_store
 from ..stores.registry import StoreRegistry
 from ..utils.urls import canonicalize_url, host_of, validate_url
 
@@ -61,8 +62,11 @@ class ProductService:
         if existing is not None:
             raise DuplicateError("Product", canonical)
 
+        # Two separate questions: which retailer is this (by domain), and which adapter
+        # reads it. Several named stores share the generic adapter.
+        store_info = resolve_store(validated)
         adapter = self.registry.resolve(validated)
-        store = self._store_row(adapter.slug)
+        store = self._store_row(store_info.slug)
 
         product = Product(
             url=validated,
@@ -76,7 +80,8 @@ class ProductService:
         log.info(
             "product.added",
             product_id=product.id,
-            store=adapter.slug,
+            store=store_info.slug,
+            adapter=adapter.slug,
             url_host=host_of(validated),
         )
         return product
@@ -86,7 +91,7 @@ class ProductService:
         if store is None:
             raise NotFoundError(
                 "Store",
-                f"{slug} (adapter exists but no database row; run 'product-tracker stores sync')",
+                f"{slug} (known store with no database row; run 'product-tracker stores sync')",
             )
         return store
 

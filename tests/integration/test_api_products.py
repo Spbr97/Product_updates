@@ -182,10 +182,23 @@ class TestStores:
 
         assert response.status_code == 200
         by_slug = {store["slug"]: store for store in response.json()}
-        assert set(by_slug) == {"flipkart", "generic"}
+        assert {"flipkart", "vijay-sales", "bigbasket", "croma", "generic"} <= set(by_slug)
         assert by_slug["generic"]["is_fallback"] is True
         assert by_slug["flipkart"]["is_fallback"] is False
         assert "flipkart.com" in by_slug["flipkart"]["domains"]
+
+    def test_named_stores_may_share_an_adapter(self, client: TestClient) -> None:
+        """Store identity is by domain; the adapter is an implementation detail."""
+        by_slug = {store["slug"]: store for store in client.get("/api/v1/stores").json()}
+
+        assert by_slug["flipkart"]["adapter"] == "flipkart"
+        assert by_slug["vijay-sales"]["adapter"] == "generic"
+        assert by_slug["bigbasket"]["adapter"] == "generic"
+        assert by_slug["vijay-sales"]["is_fallback"] is False
+
+    def test_exactly_one_fallback(self, client: TestClient) -> None:
+        stores = client.get("/api/v1/stores").json()
+        assert sum(1 for store in stores if store["is_fallback"]) == 1
 
 
 class TestOpenApi:

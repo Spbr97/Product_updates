@@ -1,32 +1,64 @@
 """The static catalogue of supported stores.
 
-This is deliberately separate from the adapter classes. The catalogue is plain data, so
-the seed migration, the CLI, and the API can all read it without importing HTTP clients or
-Playwright. Phase 2 binds each ``adapter_key`` to a concrete
-:class:`~product_tracker.stores.base.StoreAdapter`.
+**A store is not an adapter.** A store is a retailer, identified by its domains. An adapter
+is the code that reads its pages. Several stores share the generic adapter -- Vijay Sales,
+BigBasket, and Reliance Digital all publish enough structured data for it -- and they are
+still distinct stores. Conflating the two would have every one of them display as
+"generic", make per-store filtering useless, and lump their statistics together.
 
-Adding a store means: add an entry here, add the adapter module, register it, and run
-``product-tracker stores sync``.
+So this module owns *store identity* (domain -> store) and the registry owns *adapter
+selection*. A store's ``adapter_key`` says which adapter reads it.
+
+Adding a store that the generic adapter already handles is one entry here plus a seed
+migration. Only add an adapter when the generic one cannot read the site.
 """
 
 from __future__ import annotations
 
 from ..domain.models import StoreInfo
+from ..utils.urls import host_of
 
-#: Fallback slug. The generic adapter accepts any http(s) URL and extracts schema.org
-#: JSON-LD / OpenGraph metadata, so an unrecognised site is still trackable.
+#: Fallback slug. Used for any site with no catalogue entry; the generic adapter reads it.
 GENERIC_SLUG = "generic"
 
 KNOWN_STORES: tuple[StoreInfo, ...] = (
     StoreInfo(
         slug="flipkart",
         display_name="Flipkart",
-        domains=("flipkart.com", "www.flipkart.com", "dl.flipkart.com"),
+        domains=("flipkart.com", "dl.flipkart.com"),
         adapter_key="flipkart",
+    ),
+    # Verified 2026-09-01: these three are read by the generic adapter over plain HTTP.
+    StoreInfo(
+        slug="vijay-sales",
+        display_name="Vijay Sales",
+        domains=("vijaysales.com",),
+        adapter_key="generic",
+    ),
+    StoreInfo(
+        slug="reliance-digital",
+        display_name="Reliance Digital",
+        domains=("reliancedigital.in",),
+        adapter_key="generic",
+    ),
+    StoreInfo(
+        slug="bigbasket",
+        display_name="BigBasket",
+        domains=("bigbasket.com",),
+        adapter_key="generic",
+    ),
+    # Listed so its checks are attributed to Croma rather than lost in "generic".
+    # Croma blocks automated access at the edge -- a real headless browser gets the same
+    # 403 -- so checks are expected to fail and the circuit breaker backs it off.
+    StoreInfo(
+        slug="croma",
+        display_name="Croma",
+        domains=("croma.com",),
+        adapter_key="generic",
     ),
     StoreInfo(
         slug=GENERIC_SLUG,
-        display_name="Generic (schema.org)",
+        display_name="Other (schema.org)",
         domains=(),
         adapter_key="generic",
         is_fallback=True,
@@ -35,6 +67,28 @@ KNOWN_STORES: tuple[StoreInfo, ...] = (
 
 STORES_BY_SLUG: dict[str, StoreInfo] = {store.slug: store for store in KNOWN_STORES}
 
+#: The catch-all, held separately so resolution never has to search for it.
+GENERIC_STORE: StoreInfo = STORES_BY_SLUG[GENERIC_SLUG]
+
 
 def get_store_info(slug: str) -> StoreInfo | None:
     return STORES_BY_SLUG.get(slug)
+
+
+def resolve_store(url: str) -> StoreInfo:
+    """The store a URL belongs to, by hostname.
+
+    Matches the host exactly or as a subdomain, so ``vijaysales.com`` also claims
+    ``www.vijaysales.com`` but never ``notvijaysales.com``. Anything unrecognised is the
+    generic store -- still trackable, just not named.
+    """
+    host = host_of(url)
+    if not host:
+        return GENERIC_STORE
+
+    for store in KNOWN_STORES:
+        if store.is_fallback:
+            continue
+        if any(host == domain or host.endswith(f".{domain}") for domain in store.domains):
+            return store
+    return GENERIC_STORE

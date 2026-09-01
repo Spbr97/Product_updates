@@ -85,11 +85,12 @@ class CheckResponse(BaseModel):
 
 
 class StoreResponse(BaseModel):
-    """A supported store, as advertised by the adapter registry."""
+    """A supported retailer."""
 
     slug: str
     name: str
     domains: list[str]
+    adapter: str = Field(description="Which adapter reads this store's pages.")
     is_fallback: bool = Field(
-        description="True for the catch-all adapter used when no named store matches."
+        description="True for the catch-all used when no named store matches the domain."
     )

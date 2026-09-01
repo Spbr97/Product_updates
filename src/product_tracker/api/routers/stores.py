@@ -1,15 +1,15 @@
 """Store endpoints.
 
-Reports the adapters compiled into this build rather than the ``stores`` table: the
-registry is the source of truth for what can actually be fetched, and a database row
-without an adapter would be misleading.
+Lists the retailers this build recognises, from the catalogue. The catalogue is store
+identity; the adapter that reads each one is an implementation detail, exposed as
+``adapter`` for diagnosis.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-from ...stores.registry import default_registry
+from ...stores.catalogue import KNOWN_STORES
 from ..schemas.products import StoreResponse
 
 router = APIRouter(prefix="/stores", tags=["stores"])
@@ -22,7 +22,8 @@ def list_stores() -> list[StoreResponse]:
             slug=info.slug,
             name=info.display_name,
             domains=list(info.domains),
+            adapter=info.adapter_key,
             is_fallback=info.is_fallback,
         )
-        for info in default_registry().list_stores()
+        for info in KNOWN_STORES
     ]
