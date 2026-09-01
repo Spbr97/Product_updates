@@ -7,9 +7,10 @@ rules, and notifies you through configured providers — on a schedule, in the b
 Built to be extended: adding a store, a notification channel, or an alert condition means
 adding a module, not editing the tracking engine.
 
-> **Status: phases 1–4 of 7 complete.** Add products by URL, check them, read full
-> history with statistics, and get notified when your conditions are met. Scheduling
-> is next — see [Roadmap](#roadmap).
+> **Status: phases 1–5 of 7 complete.** The platform now runs itself: add products by
+> URL and a background worker checks them on their own interval, records history, and
+> alerts you. Remaining work is API/CLI polish and a quality pass — see
+> [Roadmap](#roadmap).
 
 ---
 
@@ -233,22 +234,44 @@ product-tracker alerts remove <RULE_ID> [--yes]
 product-tracker alerts history <ID>
 product-tracker pause <ID>
 product-tracker resume <ID>
-```
 
-Commands arriving in later phases: `worker`.
+product-tracker worker [--dry-run]
+product-tracker check-all [--limit 100]
+```
 
 ## 10. Running the scheduler/workers
 
-Lands in phase 5. The worker will run as its own process, separate from the API:
+The worker is its own process, separate from the API — a check can take half a minute and
+the API should stay responsive.
 
 ```powershell
-product-tracker worker
+product-tracker worker              # runs until Ctrl+C
+product-tracker worker --dry-run    # show what would be scheduled, then exit
+product-tracker check-all           # check every active product once, now
 # or: docker compose -f docker/docker-compose.yml --profile worker up
 ```
 
-It persists jobs in PostgreSQL with deterministic per-product IDs (so restarts cannot
-create duplicate jobs), reconciles against the database on an interval, retries transient
-failures with backoff, and throttles per store.
+On Windows, `scripts/install-scheduled-task.ps1` registers it to start at sign-in and
+restart if it exits (`-Remove` to undo).
+
+What it does:
+
+- **Persists jobs in PostgreSQL** with a deterministic id per product (`product:42`), so a
+  restart resumes the existing schedule instead of re-checking everything at once, and
+  scheduling the same product twice replaces its job rather than adding a second.
+- **Reconciles against the database** every `RECONCILE_INTERVAL_SECONDS`. Products are
+  added and paused through the API and CLI, which never talk to the worker; reconcile is
+  what closes that gap.
+- **Retries transient failures** (timeouts, 5xx) with capped exponential backoff. A block,
+  a missing price, or an unrecognised page is *not* retried — none of those change on an
+  immediate second attempt, and retrying a block is what the store is objecting to.
+- **Throttles per store**, with jitter, and opens a **circuit breaker** after
+  `STORE_FAILURE_THRESHOLD` consecutive failures. Both are per-store, so one failing site
+  never delays products from another. A check skipped by the breaker is recorded as
+  `skipped` — not `failed`, because nothing was attempted.
+
+> **One worker per database.** APScheduler's job store has no cross-process locking, so a
+> second worker would run every job a second time.
 
 ## 11. Adding a new store adapter
 
@@ -346,6 +369,9 @@ docker build -f docker/Dockerfile `
 | `status` says "no stores registered" | Run `product-tracker stores sync`. |
 | Integration tests all skip | `TEST_DATABASE_URL` is unset. That is intentional, not a failure. |
 | Readiness hangs | Should not happen: `DB_CONNECT_TIMEOUT_SECONDS` (default 5) bounds connection attempts. |
+| The worker never checks a product added while it was running | Reconcile runs every `RECONCILE_INTERVAL_SECONDS` (default 60). Wait one interval, or restart the worker. |
+| A check is recorded as `skipped` | The store's circuit breaker is open after repeated failures. It half-opens after `STORE_CIRCUIT_RESET_SECONDS`. `error_detail` says how long is left. |
+| Every job runs twice | Two workers are running against one database. Only run one. |
 | An alert fired once and then went quiet | Deduplication. The same alert is delivered once per day; a further price move alerts again. Check `product-tracker alerts history <ID>`. |
 | No alert at all | Is the rule enabled, is it within its cooldown, and is a provider configured? `product-tracker alerts list` and `product-tracker config` show all three. |
 | Notification status is `suppressed` | No configured provider accepted it. Set `NOTIFY_DEFAULT_PROVIDERS` and the channel's own settings. |
@@ -365,6 +391,6 @@ docker build -f docker/Dockerfile `
 | 2 | Store adapter interface, generic + Flipkart adapters, URL validation, manual check | **done** |
 | 3 | Price/availability history, statistics, change detection | **done** |
 | 4 | Tracking rules, notification abstraction, providers, deduplication | **done** |
-| 5 | Scheduler, background worker, retries, rate limiting | next |
-| 6 | Complete API and CLI surface, auth, pagination | |
+| 5 | Scheduler, background worker, retries, rate limiting | **done** |
+| 6 | Complete API and CLI surface, auth, pagination | next |
 | 7 | Test coverage, Docker polish, docs, security and performance review | |

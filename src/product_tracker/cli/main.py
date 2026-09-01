@@ -15,7 +15,7 @@ from .. import __version__
 from ..core.config import get_settings
 from ..core.logging import configure_logging
 from ..domain.errors import ConfigurationError
-from . import alerts, history, products, system
+from . import alerts, history, products, system, worker
 from .formatting import ExitCode, error, stdout
 
 app = typer.Typer(
@@ -39,6 +39,9 @@ app.command("history")(history.history)
 app.add_typer(alerts.alerts_app, name="alerts")
 app.command("pause")(alerts.pause)
 app.command("resume")(alerts.resume)
+
+app.command("worker")(worker.worker)
+app.command("check-all")(worker.check_all)
 
 
 def _version_callback(value: bool) -> None:

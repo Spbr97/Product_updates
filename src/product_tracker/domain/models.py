@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol
 
 from .enums import Availability, FetchMethod, FetchOutcome, RuleType, TrackingStatus
 
@@ -162,3 +162,36 @@ class NotificationMessage:
     body: str
     url: str | None = None
     context: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class GuardDecision:
+    """Whether a check may proceed, and why not if it may not."""
+
+    proceed: bool
+    reason: str | None = None
+
+    @classmethod
+    def go(cls) -> GuardDecision:
+        return cls(proceed=True)
+
+    @classmethod
+    def skip(cls, reason: str) -> GuardDecision:
+        return cls(proceed=False, reason=reason)
+
+
+class CheckGuard(Protocol):
+    """Paces outgoing requests and can veto a check.
+
+    Implemented by the worker's per-store throttle and circuit breaker. Declared here so
+    the tracking engine can consult one without importing the scheduler -- dependencies
+    point inward, and the engine is inward of the scheduler.
+    """
+
+    def before(self, store_slug: str) -> GuardDecision:
+        """Called before a fetch. May block to honour a rate limit."""
+        ...
+
+    def after(self, store_slug: str, *, succeeded: bool) -> None:
+        """Called after a fetch, with its outcome."""
+        ...

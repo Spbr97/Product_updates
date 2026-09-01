@@ -17,12 +17,16 @@ After history is recorded, the product's rules are evaluated and any matches bec
 notifications. None of that can fail a check: the observation is already stored, and a
 misbehaving rule or an unreachable provider is logged and recorded rather than raised.
 
-Retries and throttling arrive in phase 5.
+Transient outcomes are retried with capped exponential backoff. An optional
+``CheckGuard`` -- supplied by the worker, absent for one-shot checks -- paces requests per
+store and can veto a check entirely, which is recorded as ``skipped`` rather than failed.
 """
 
 from __future__ import annotations
 
+import random
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
@@ -39,7 +43,13 @@ from ..core.logging import (
 from ..db.models import CheckExecution, Product
 from ..domain.enums import Availability, CheckStatus, FetchMethod, FetchOutcome
 from ..domain.errors import NotFoundError
-from ..domain.models import FetchContext, FetchResult, ProductSnapshot, RuleContext
+from ..domain.models import (
+    CheckGuard,
+    FetchContext,
+    FetchResult,
+    ProductSnapshot,
+    RuleContext,
+)
 from ..notifications.base import NotificationProvider
 from ..repositories.availability_history import AvailabilityHistoryRepository
 from ..repositories.executions import truncate_error
@@ -59,6 +69,9 @@ from .rules_engine import evaluate_all
 
 log = get_logger(__name__)
 
+#: Recorded as ``error_type`` when a guard vetoed the check before any request.
+SKIP_ERROR_TYPE = "skipped_by_guard"
+
 
 class TrackingEngine:
     """Runs a check for one product and records the outcome."""
@@ -68,11 +81,16 @@ class TrackingEngine:
         registry: StoreRegistry,
         settings: Settings,
         providers: list[NotificationProvider] | None = None,
+        guard: CheckGuard | None = None,
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self.registry = registry
         self.settings = settings
         # Injected in tests; resolved from settings on first use otherwise.
         self.providers = providers
+        # Supplied by the worker. A one-shot check has no pacing to do.
+        self.guard = guard
+        self._sleep = sleeper
 
     def fetch_context(self) -> FetchContext:
         return FetchContext(
@@ -105,8 +123,27 @@ class TrackingEngine:
         started = datetime.now(UTC)
         began = time.monotonic()
 
+        # The guard paces outgoing requests and can veto the check outright. A one-shot
+        # CLI or API check passes no guard: there is nothing to pace.
+        if self.guard is not None:
+            decision = self.guard.before(store_slug or "")
+            if not decision.proceed:
+                execution = self._record_skipped(
+                    session=session,
+                    product=product,
+                    store_id=store_id,
+                    started_at=started,
+                    reason=decision.reason or "skipped",
+                )
+                log.info(EVENT_CHECK_FINISHED, status=execution.status.value, skipped=True)
+                clear_context()
+                return execution
+
         # Outside any transaction: this is the slow part.
-        result = self._fetch(url)
+        result, attempts = self._fetch_with_retry(url)
+
+        if self.guard is not None:
+            self.guard.after(store_slug or "", succeeded=result.succeeded)
 
         duration_ms = int((time.monotonic() - began) * 1000)
         execution = self._record(
@@ -116,6 +153,7 @@ class TrackingEngine:
             store_id=store_id,
             started_at=started,
             duration_ms=duration_ms,
+            attempts=attempts,
         )
 
         log.info(
@@ -129,6 +167,40 @@ class TrackingEngine:
         )
         clear_context()
         return execution
+
+    def _fetch_with_retry(self, url: str) -> tuple[FetchResult, int]:
+        """Fetch, retrying outcomes that a moment's wait might fix.
+
+        Only *transient* outcomes are retried -- a timeout or a 5xx. A block, a missing
+        price, or an unrecognised page will not change on an immediate second attempt, and
+        retrying a block is precisely what the store is objecting to.
+
+        Returns the final result and how many attempts it took, which is stored on the
+        execution row so a flaky store is visible in the data.
+        """
+        attempts = max(1, self.settings.http_max_retries)
+        result = self._fetch(url)
+
+        for attempt in range(1, attempts):
+            if not result.outcome.is_transient:
+                return result, attempt
+            delay = self._backoff(attempt)
+            log.info(
+                "check.retry",
+                attempt=attempt + 1,
+                of=attempts,
+                outcome=result.outcome.value,
+                delay_seconds=round(delay, 2),
+            )
+            self._sleep(delay)
+            result = self._fetch(url)
+
+        return result, attempts
+
+    def _backoff(self, attempt: int) -> float:
+        """Exponential backoff with jitter, capped so a retry never blocks for long."""
+        base = min(2.0 ** (attempt - 1), 8.0)
+        return base + random.uniform(0, 0.5)
 
     def _fetch(self, url: str) -> FetchResult:
         """Resolve an adapter and fetch, converting any surprise into a FetchResult.
@@ -162,6 +234,7 @@ class TrackingEngine:
         store_id: int,
         started_at: datetime,
         duration_ms: int,
+        attempts: int = 1,
     ) -> CheckExecution:
         """Apply the result to the product, append history, and write the execution row."""
         finished = datetime.now(UTC)
@@ -196,7 +269,7 @@ class TrackingEngine:
             availability_result=result.availability,
             price_changed=price_outcome.changed,
             availability_changed=availability_outcome.changed,
-            attempts=1,
+            attempts=attempts,
             error_type=None if status is CheckStatus.SUCCESS else result.outcome.value,
             error_detail=None if status is CheckStatus.SUCCESS else truncate_error(result.message),
         )
@@ -311,6 +384,36 @@ class TrackingEngine:
 
     def _notifier(self, session: Session) -> NotificationService:
         return NotificationService(session, self.settings, providers=self.providers)
+
+    def _record_skipped(
+        self,
+        *,
+        session: Session,
+        product: Product,
+        store_id: int,
+        started_at: datetime,
+        reason: str,
+    ) -> CheckExecution:
+        """Record that a check was deliberately not attempted.
+
+        A skip is not a failure: nothing was tried, so ``consecutive_failures`` and
+        ``last_checked_at`` are left alone. The row exists so the reason is visible.
+        """
+        execution = CheckExecution(
+            product_id=product.id,
+            store_id=store_id,
+            started_at=started_at,
+            finished_at=datetime.now(UTC),
+            duration_ms=0,
+            status=CheckStatus.SKIPPED,
+            fetch_method=FetchMethod.NONE,
+            attempts=0,
+            error_type=SKIP_ERROR_TYPE,
+            error_detail=truncate_error(reason),
+        )
+        session.add(execution)
+        session.flush()
+        return execution
 
     def _apply(self, product: Product, result: FetchResult) -> None:
         """Copy a successful reading onto the product row.
