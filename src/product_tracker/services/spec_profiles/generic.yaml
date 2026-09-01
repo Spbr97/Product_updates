@@ -1,0 +1,16 @@
+# Anything not recognised as a known category.
+#
+# Colour only, deliberately. Reading every measurement out of an unknown product's title
+# produces a ragged table of fields nobody asked for, and a wrong specification is worse
+# than an absent one. A new category is a file next to this one.
+
+category: generic
+match: []
+
+fields:
+  colour:
+    kind: colour
+    label: Colour
+
+label: [colour]
+display: []

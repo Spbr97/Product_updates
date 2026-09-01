@@ -16,12 +16,18 @@ name:
   - "#title span"
   - 'meta[name="title"]'
 
+# Fallbacks only. The price is normally read by read_price_to_pay() in amazon.py, which
+# understands that Amazon splits the payable price across .a-price-whole/.a-price-fraction
+# and leaves its .a-offscreen empty.
+#
+# Every selector here excludes .a-text-price, which is the struck-out MRP. Without that
+# exclusion the buy box yields the MRP -- Rs 84,999 for a phone selling at Rs 61,480 --
+# and a plausible-looking wrong price is far worse than none.
 price:
-  # The buy box, newest layout first. Anchored, never page-wide.
-  - "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen"
-  - "#corePrice_feature_div .a-price .a-offscreen"
-  - "#apex_desktop .a-price .a-offscreen"
-  - "#corePriceDisplay_mobile_feature_div .a-price .a-offscreen"
+  - "#corePrice_feature_div span.a-price:not(.a-text-price) .a-offscreen"
+  - "#corePriceDisplay_desktop_feature_div span.a-price:not(.a-text-price) .a-offscreen"
+  - "#apex_desktop span.a-price:not(.a-text-price) .a-offscreen"
+  - "#corePriceDisplay_mobile_feature_div span.a-price:not(.a-text-price) .a-offscreen"
   # Older single-node layouts.
   - "#priceblock_ourprice"
   - "#priceblock_dealprice"

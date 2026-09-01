@@ -334,7 +334,12 @@ class TestPacing:
         searches = {"a": FakeSearch("a", ok("a", hit("a", "Galaxy S25", 1.0)), None)}
         EscalationHarness(monkeypatch, searches, {})
 
-        module.discover("Galaxy S25", Settings(database_url="postgresql+psycopg://x/y"))
+        # shared_pacing off so the guard it builds is the in-memory one: this test is
+        # about *whether* discover paces itself, and the shared guard needs a database.
+        module.discover(
+            "Galaxy S25",
+            Settings(database_url="postgresql+psycopg://x/y", shared_pacing=False),
+        )
 
         assert built, "discover must pace itself even when the caller forgets to ask"
 
@@ -388,3 +393,49 @@ class TestPacing:
 
         assert not searches["a"].calls
         assert [r.store_slug for r in found.unsearchable] == ["a"]
+
+
+class TestWhoseFaultItIs:
+    """A shop's circuit breaker should record the shop's behaviour, not ours."""
+
+    @staticmethod
+    def settings():  # type: ignore[no-untyped-def]
+        from product_tracker.core.config import Settings
+
+        return Settings(database_url="postgresql+psycopg://x/y", shared_pacing=False)
+
+    def outcomes_recorded(self, monkeypatch, outcome) -> list[bool]:  # type: ignore[no-untyped-def]
+        from product_tracker.domain.models import GuardDecision
+        from product_tracker.services import discovery as module
+
+        recorded: list[bool] = []
+
+        class RecordingGuard:
+            def before(self, host: str) -> GuardDecision:
+                return GuardDecision.go()
+
+            def after(self, host: str, *, succeeded: bool) -> None:
+                recorded.append(succeeded)
+
+        searches = {"a": FakeSearch("a", SearchResult.failure("a", outcome, "x"), None)}
+        EscalationHarness(monkeypatch, searches, {})
+        module.discover("Galaxy S25", self.settings(), guard=RecordingGuard())
+        return recorded
+
+    def test_a_robots_refusal_is_not_counted_against_the_shop(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """Flipkart asks us not to crawl its search, so we do not.
+
+        Counting that as three failures opened the circuit against flipkart.com -- the same
+        host whose *product pages* we check perfectly happily, and which we would then have
+        started skipping for a reason that was entirely our own.
+        """
+        assert self.outcomes_recorded(monkeypatch, SearchOutcome.DISALLOWED) == []
+
+    def test_a_missing_browser_is_not_counted_against_the_shop(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        assert self.outcomes_recorded(monkeypatch, SearchOutcome.NEEDS_BROWSER) == []
+
+    def test_a_real_refusal_by_the_shop_is_counted(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        assert self.outcomes_recorded(monkeypatch, SearchOutcome.BLOCKED) == [False]
+
+    def test_a_timeout_is_counted(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        assert self.outcomes_recorded(monkeypatch, SearchOutcome.TIMEOUT) == [False]

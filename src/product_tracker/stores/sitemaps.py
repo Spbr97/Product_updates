@@ -29,6 +29,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -94,10 +95,21 @@ def _read_cache(slug: str) -> list[str] | None:
 
 
 def _write_cache(slug: str, urls: list[str]) -> None:
+    """Write the catalogue, atomically.
+
+    Temp file then ``os.replace``, which is atomic on both platforms. A plain write is not:
+    two processes refreshing the same catalogue at once can interleave, and a reader then
+    finds truncated JSON. It degrades to a refetch rather than corrupting anything, but a
+    refetch is a megabyte of somebody else's bandwidth.
+    """
+    path = _cache_path(slug)
+    payload = json.dumps({"fetched_at": time.time(), "urls": urls})
     try:
-        _cache_path(slug).write_text(
-            json.dumps({"fetched_at": time.time(), "urls": urls}), encoding="utf-8"
-        )
+        # In the same directory, so the replace is a rename rather than a copy across
+        # filesystems. Unique per process so two writers do not share the temp file either.
+        temporary = path.with_suffix(f".{os.getpid()}.tmp")
+        temporary.write_text(payload, encoding="utf-8")
+        os.replace(temporary, path)
     except OSError as error:
         # A cache that cannot be written is a slow search, not a broken one.
         log.debug("sitemap.cache_write_failed", store=slug, detail=str(error)[:80])

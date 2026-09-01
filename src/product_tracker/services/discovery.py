@@ -21,7 +21,7 @@ from ..core.config import Settings
 from ..core.logging import get_logger
 from ..domain.enums import SearchOutcome
 from ..domain.models import CheckGuard, FetchContext, SearchHit, SearchResult
-from ..scheduler.throttle import StoreGuard
+from ..scheduler.throttle import build_guard
 from ..stores import browser
 from ..stores.catalogue import KNOWN_STORES
 from ..stores.search import (
@@ -177,17 +177,23 @@ def discover(
     return discovery
 
 
+#: Outcomes that say something about us rather than about the shop.
+_NOT_THE_HOSTS_FAULT = frozenset(
+    {
+        SearchOutcome.DISALLOWED,
+        SearchOutcome.UNSUPPORTED,
+        SearchOutcome.NEEDS_BROWSER,
+    }
+)
+
+
 def _default_guard(settings: Settings) -> CheckGuard:
     """The same per-host pacing and circuit breaking a scheduled check gets.
 
-    Search is not exempt from politeness merely because a person typed it.
+    Shared across processes, which is what search actually needs: two people searching at
+    once are two processes, and two in-memory guards would each believe they were alone.
     """
-    return StoreGuard(
-        min_interval_seconds=settings.store_min_interval_seconds,
-        jitter_seconds=settings.fetch_jitter_seconds,
-        failure_threshold=settings.store_failure_threshold,
-        reset_seconds=settings.store_circuit_reset_seconds,
-    )
+    return build_guard(settings)
 
 
 def _guarded(
@@ -204,7 +210,12 @@ def _guarded(
             slug, SearchOutcome.ERROR, decision.reason or "throttled"
         )
     result = call()
-    guard.after(host, succeeded=result.succeeded)
+    # Only the host's own behaviour counts towards its circuit breaker. A search we
+    # declined to make (their robots.txt said not to), or could not make (no browser
+    # installed), is our decision and not a failure on their part -- and counting it would
+    # open the circuit against a host we are still checking *products* on quite happily.
+    if result.outcome not in _NOT_THE_HOSTS_FAULT:
+        guard.after(host, succeeded=result.succeeded)
     return result
 
 

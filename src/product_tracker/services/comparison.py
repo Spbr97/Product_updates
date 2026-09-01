@@ -71,10 +71,15 @@ def build_matrix(
     # Columns ordered by display name so the grid is stable between renders.
     store_slugs = tuple(sorted(store_names, key=lambda s: store_names[s].casefold()))
 
-    rows = tuple(
+    built = (
         _build_row(variant, grid, store_slugs, stale_after=stale_after, now=moment)
         for variant in grid.variants
     )
+    # A model no shop in this group carries is a row of dashes: it states nothing and
+    # pushes the real rows down. Variants are left behind by ordinary editing -- moving a
+    # listing to a differently-named model empties the one it came from -- so this is
+    # about tidiness in the view, not about deleting anything.
+    rows = tuple(row for row in built if _has_any_listing(row))
 
     currencies = sorted(
         {
@@ -94,7 +99,13 @@ def build_matrix(
         rows=rows,
         generated_at=moment,
         currencies=tuple(currencies),
+        category=group.category,
     )
+
+
+def _has_any_listing(row: ComparisonRow) -> bool:
+    """Whether any shop in this group carries this model at all."""
+    return any(cell.status is not CellStatus.NOT_TRACKED for cell in row.cells.values())
 
 
 def _store_names(grid: GridData) -> dict[str, str]:

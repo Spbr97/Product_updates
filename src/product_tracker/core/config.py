@@ -79,6 +79,19 @@ class Settings(BaseSettings):
 
     # --- Politeness towards stores ----------------------------------------------
     store_min_interval_seconds: float = Field(default=5.0, ge=0.0, le=600.0)
+    #: Share pacing through the database so every process queues behind the same
+    #: slots. Off falls back to per-process pacing, which is only correct when a
+    #: single process makes all the requests.
+    shared_pacing: bool = True
+    #: Longest one request will wait for its turn. Beyond this it is refused instead,
+    #: so ten simultaneous searches do not each queue a minute deep.
+    store_max_wait_seconds: float = Field(default=20.0, ge=0.0, le=300.0)
+
+    #: Per-account ceilings. One user must not be able to schedule enough requests to
+    #: get the shared IP blocked by a retailer -- which is a thing that happens.
+    max_listings_per_user: int = Field(default=200, ge=1, le=10_000)
+    max_groups_per_user: int = Field(default=50, ge=1, le=1_000)
+    max_alerts_per_user: int = Field(default=200, ge=1, le=10_000)
     fetch_jitter_seconds: float = Field(default=3.0, ge=0.0, le=60.0)
     store_failure_threshold: int = Field(
         default=5, ge=1, le=100, description="Consecutive failures before a store is backed off."

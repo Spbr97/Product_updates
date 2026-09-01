@@ -21,6 +21,7 @@ from ..domain.models import ComparisonCell, ComparisonMatrix
 from ..repositories.groups import GroupRepository
 from ..services import group_service
 from ..services.comparison import DEFAULT_STALE_AFTER, GroupNotFoundError, build_matrix
+from ..services.specs import available_profiles, render_specs
 from ..utils.money import format_money_short
 from .formatting import ExitCode, error, info, stdout, success, table
 from .users import UserOption, acting_user
@@ -86,6 +87,16 @@ def _grid(matrix: ComparisonMatrix) -> Table:
         padding=(0, 1),
     )
     grid.add_column("Model", no_wrap=True, style="bold")
+
+    # A Specs column only where there are specs to put in it. A phone comparison would
+    # otherwise grow an empty column, and a column of blanks reads as missing data.
+    specs = {
+        row.label: render_specs(matrix.category, row.attributes) for row in matrix.rows
+    }
+    show_specs = any(specs.values())
+    if show_specs:
+        grid.add_column("Specs", no_wrap=True, style="dim")
+
     for slug in matrix.store_slugs:
         grid.add_column(matrix.store_names[slug], justify="right", no_wrap=True)
 
@@ -98,7 +109,8 @@ def _grid(matrix: ComparisonMatrix) -> Table:
             if slug in best and len(best) < len(matrix.store_slugs):
                 rendered = f"[bold green]{rendered}[/bold green]"
             cells.append(rendered)
-        grid.add_row(row.label, *cells)
+        leading = [row.label, specs[row.label]] if show_specs else [row.label]
+        grid.add_row(*leading, *cells)
     return grid
 
 
@@ -112,7 +124,11 @@ def _stacked(matrix: ComparisonMatrix) -> None:
     width = max((len(matrix.store_names[s]) for s in matrix.store_slugs), default=0)
     for row in matrix.rows:
         best = set(row.best_store_slugs)
-        stdout.print(f"[bold]{row.label}[/bold]")
+        heading = f"[bold]{row.label}[/bold]"
+        spec_line = render_specs(matrix.category, row.attributes)
+        if spec_line:
+            heading += f"  [dim]{spec_line}[/dim]"
+        stdout.print(heading)
         # Priced shops first, cheapest first; the rest keep their column order.
         priced = [s for s in matrix.store_slugs if row.cells[s].has_price]
         priced.sort(key=lambda s: row.cells[s].price or 0)
@@ -237,12 +253,15 @@ def list_groups(user: UserOption = None) -> None:
             info("No product groups yet. Create one with: product-tracker groups add <name>")
             return
 
-        listing = table("Product groups", ["Slug", "Name", "Brand", "Models", "Listings"])
+        listing = table(
+            "Product groups", ["Slug", "Name", "Brand", "Kind", "Models", "Listings"]
+        )
         for group in groups:
             listing.add_row(
                 group.slug,
                 group.name,
                 group.brand or "-",
+                group.category or "-",
                 str(len(group.variants)),
                 str(counts.get(group.id, 0)),
             )
@@ -255,6 +274,13 @@ def add_group(
         str | None, typer.Option("--slug", help="URL-safe id. Derived from the name if omitted.")
     ] = None,
     brand: Annotated[str | None, typer.Option("--brand", help="Manufacturer.")] = None,
+    category: Annotated[
+        str | None,
+        typer.Option(
+            "--category",
+            help=f"What kind of product: {', '.join(available_profiles())}. Detected if unset.",
+        ),
+    ] = None,
     user: UserOption = None,
 ) -> None:
     """Create a product group."""
@@ -266,6 +292,7 @@ def add_group(
                 slug=slug,
                 name=name,
                 brand=brand,
+                category=category,
             )
             created = group.slug
     except ValidationError as exc:

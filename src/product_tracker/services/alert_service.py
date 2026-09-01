@@ -11,10 +11,16 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..core.config import Settings, get_settings
 from ..core.logging import get_logger
 from ..db.models import Product, TrackingRule
 from ..domain.enums import RuleType, TrackingStatus
-from ..domain.errors import DuplicateError, NotFoundError, ValidationError
+from ..domain.errors import (
+    DuplicateError,
+    NotFoundError,
+    QuotaExceededError,
+    ValidationError,
+)
 from ..notifications.registry import ALL_PROVIDERS
 from ..repositories.products import ProductRepository
 from ..repositories.rules import TrackingRuleRepository
@@ -41,9 +47,12 @@ class AlertService:
     watching which ids come back 403 instead of 404.
     """
 
-    def __init__(self, session: Session, user_id: int) -> None:
+    def __init__(
+        self, session: Session, user_id: int, settings: Settings | None = None
+    ) -> None:
         self.session = session
         self.user_id = user_id
+        self.settings = settings
         self.rules = TrackingRuleRepository(session)
         self.products = ProductRepository(session)
         self.subscriptions = SubscriptionRepository(session)
@@ -64,6 +73,10 @@ class AlertService:
         # On something you watch. Otherwise a rule is a way to learn another user's prices
         # by having the system tell you when they move.
         assert_subscribed(self.session, self.user_id, product_id)
+
+        limit = (self.settings or get_settings()).max_alerts_per_user
+        if self.rules.count_filtered(user_id=self.user_id) >= limit:
+            raise QuotaExceededError("alert rules", limit)
 
         if rule_type not in RULE_EVALUATORS:
             raise ValidationError(f"no evaluator is registered for rule type {rule_type.value}")

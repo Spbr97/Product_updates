@@ -383,7 +383,9 @@ class TestGroupsArePrivate:
 
         group_service.detach_product(db_session, product.id, alice)
 
-        assert build_matrix(db_session, "iphone-17", user_id=alice).rows[0].cells == {}
+        # Alice's group now holds a model no shop carries, which the grid omits rather
+        # than drawing as a row of dashes.
+        assert build_matrix(db_session, "iphone-17", user_id=alice).rows == ()
         bob_row = build_matrix(db_session, "iphone-17", user_id=bob).rows[0]
         assert any(cell.product_id == product.id for cell in bob_row.cells.values())
 

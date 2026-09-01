@@ -26,31 +26,34 @@ def interpret(fixture: str, url: str = URL):  # type: ignore[no-untyped-def]
 
 
 class TestPriceComesFromTheBuyBox:
-    def test_reads_the_product_price(self) -> None:
+    def test_reads_the_price_you_pay(self) -> None:
         result = interpret("amazon_product.html")
 
         assert result.outcome is FetchOutcome.OK
-        assert result.price == Decimal("84999")
+        assert result.price == Decimal("61480.00")
         assert result.currency == "INR"
 
-    def test_a_cross_sell_tile_is_not_the_product_price(self) -> None:
-        """The bug this adapter exists to prevent.
+    def test_the_struck_out_mrp_is_never_the_price(self) -> None:
+        """The worst bug this adapter has had, and the hardest to see.
 
-        A page-wide ``.a-price`` matches about fifteen "customers also bought" tiles, and
-        the first of them priced an Rs 84,999 phone at Rs 61,480 -- reported as a success.
+        Amazon renders both prices in the buy box, but ``priceToPay``'s ``.a-offscreen`` is
+        empty -- the digits live in ``.a-price-whole``. So a selector reading
+        ``.a-offscreen`` finds nothing for the real price and falls through to the only
+        readable one: the MRP. Every reported price was plausible and every one was wrong,
+        including Rs 84,999 for a phone selling at Rs 61,480.
         """
         result = interpret("amazon_product.html")
 
-        assert result.price != Decimal("61480.00")
-        assert result.price == Decimal("84999")
+        assert result.price != Decimal("84999")
+        assert result.price == Decimal("61480.00")
 
-    def test_an_empty_leading_price_node_does_not_hide_the_real_one(self) -> None:
-        """Amazon's buy box leads with an empty ``.a-offscreen``.
+    def test_the_price_is_read_from_whole_and_fraction(self) -> None:
+        """Because the screen-reader copy of the payable price is blank."""
+        assert interpret("amazon_product.html").price == Decimal("61480.00")
 
-        Taking only the first match per selector found nothing here and fell through to a
-        selector that matched a recommendation tile.
-        """
-        assert interpret("amazon_product.html").price == Decimal("84999")
+    def test_a_cross_sell_tile_is_not_the_product_price(self) -> None:
+        """Anchored to the buy box: a page-wide selector matches recommendation tiles."""
+        assert interpret("amazon_product.html").price != Decimal("1299.00")
 
     def test_reads_the_title_and_asin(self) -> None:
         result = interpret("amazon_product.html")
@@ -89,7 +92,7 @@ class TestAvailabilityIsReadFromWords:
         result = interpret("amazon_low_stock.html")
 
         assert result.availability is Availability.IN_STOCK
-        assert result.price == Decimal("79999")
+        assert result.price == Decimal("79999.00")
 
     def test_unrecognised_wording_is_unknown_not_assumed(self) -> None:
         """Wording we have not seen tells us nothing, so it must not become a verdict."""
@@ -97,7 +100,7 @@ class TestAvailabilityIsReadFromWords:
 
         assert result.availability is Availability.UNKNOWN
         # The price is still real and still reported.
-        assert result.price == Decimal("84999")
+        assert result.price == Decimal("84999.00")
         assert result.outcome is FetchOutcome.OK
 
 

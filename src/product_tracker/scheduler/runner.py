@@ -27,7 +27,7 @@ from . import heartbeat
 from .apscheduler_queue import APSchedulerJobQueue
 from .jobqueue import JobQueue, ReconcileReport
 from .lock import WorkerLock
-from .throttle import StoreGuard
+from .throttle import build_guard
 
 log = get_logger(__name__)
 
@@ -103,12 +103,7 @@ class WorkerRunner:
     def __init__(self, settings: Settings | None = None, queue: JobQueue | None = None) -> None:
         self.settings = settings or get_settings()
         self.worker_id = heartbeat.new_worker_id()
-        self.guard = StoreGuard(
-            min_interval_seconds=self.settings.store_min_interval_seconds,
-            jitter_seconds=self.settings.fetch_jitter_seconds,
-            failure_threshold=self.settings.store_failure_threshold,
-            reset_seconds=self.settings.store_circuit_reset_seconds,
-        )
+        self.guard = build_guard(self.settings)
         self.queue = queue or APSchedulerJobQueue(
             self.settings.database_url, check_callable=check_worker.run_check
         )

@@ -1,0 +1,30 @@
+# Phones and tablets.
+#
+# The storage rule is the subtle one and it has its own regression test. Each "RAM" token
+# claims the single *nearest* capacity, because a proximity window discards the storage
+# figure too: in "8GB RAM, 256GB Storage" the word RAM sits close to both numbers, so a
+# window-based rule yields no storage at all.
+
+category: phone
+match:
+  - '\b(?:smartphone|mobile phone|5g|4g lte)\b'
+  - '\b(?:iphone|galaxy|redmi|realme|oneplus|pixel|vivo|oppo|poco)\b'
+  - '\b\d+\s?gb\b.*\b(?:rom|storage)\b'
+
+fields:
+  storage:
+    kind: capacity
+    label: Storage
+    exclude_near: '\bRAM\b'          # the nearest capacity to a RAM token is memory
+    prefer_near: '\b(?:ROM|Storage|SSD|HDD|Internal)\b'
+  ram:
+    kind: capacity
+    label: RAM
+    require_near: '\bRAM\b'
+  colour:
+    kind: colour
+    label: Colour
+
+# Storage and colour identify a variant; RAM is shown but rarely distinguishes one.
+label: [storage, colour]
+display: [storage, ram]

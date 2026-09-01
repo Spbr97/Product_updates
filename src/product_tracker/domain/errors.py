@@ -30,6 +30,23 @@ class ValidationError(ProductTrackerError):
     """Caller supplied something we will not accept."""
 
 
+class QuotaExceededError(ValidationError):
+    """An account has reached one of its ceilings.
+
+    A ValidationError, so it surfaces as 422 with a message naming the limit rather than as
+    a server error. The ceilings exist because one account scheduling unlimited requests can
+    get a shared IP blocked by a retailer -- which costs every other user, not just them.
+    """
+
+    def __init__(self, what: str, limit: int) -> None:
+        super().__init__(
+            f"you already have the maximum of {limit} {what}. Remove one first, "
+            f"or raise the limit in configuration."
+        )
+        self.what = what
+        self.limit = limit
+
+
 class InvalidURLError(ValidationError):
     """URL is malformed, uses a disallowed scheme, or embeds credentials."""
 

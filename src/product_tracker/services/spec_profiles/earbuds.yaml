@@ -1,0 +1,33 @@
+# Wireless earbuds and headphones.
+#
+# Playtime is what buyers compare first and shops put it in the title, usually as
+# "50 Hours Playtime" or "upto 50H". Driver size and noise cancelling are the other two
+# that actually separate one model from the next.
+
+category: earbuds
+match:
+  - '\b(?:earbud|earbuds|earphone|earphones|headphone|headphones|tws)\b'
+  - '\b(?:airdopes|airpods|neckband)\b'
+  - '\btrue wireless\b'
+
+fields:
+  playtime:
+    kind: measure
+    label: Playtime
+    pattern: '(\d{1,3})\s*(?:h\b|hrs?\b|hours?\b)'
+    unit: h
+  driver:
+    kind: measure
+    label: Driver
+    pattern: '(\d{1,2}(?:\.\d)?)\s*mm\b'
+    unit: mm
+  anc:
+    kind: flag
+    label: ANC
+    pattern: '\bANC\b|active noise cancel'
+  colour:
+    kind: colour
+    label: Colour
+
+label: [colour]
+display: [playtime, driver, anc]

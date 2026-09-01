@@ -21,6 +21,7 @@ real, confidently wrong answers before this adapter existed:
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from typing import ClassVar
 
 from bs4 import BeautifulSoup
@@ -28,6 +29,7 @@ from bs4 import BeautifulSoup
 from ..core.logging import EVENT_FETCH_RESULT, get_logger
 from ..domain.enums import Availability, FetchMethod, FetchOutcome
 from ..domain.models import FetchContext, FetchResult
+from ..utils.money import parse_price
 from ..utils.urls import host_of
 from . import browser as browser_module
 from . import selector_config
@@ -78,6 +80,43 @@ def read_availability(text: str | None) -> Availability:
         if phrase in lowered:
             return Availability.IN_STOCK
     return Availability.UNKNOWN
+
+
+def read_price_to_pay(soup: BeautifulSoup) -> Decimal | None:
+    """The price Amazon will actually charge.
+
+    Amazon renders two prices in its buy box and labels them, which is the only reliable
+    way to tell them apart:
+
+    * ``priceToPay`` / ``apex-pricetopay-value`` -- what you pay.
+    * ``a-text-price`` / ``apex-basisprice-value`` -- the struck-out MRP.
+
+    The trap is that ``priceToPay``'s ``.a-offscreen`` is *empty*: the digits live in
+    ``.a-price-whole`` and ``.a-price-fraction``. So a selector that reads ``.a-offscreen``
+    inside the buy box finds nothing for the real price and falls through to the only
+    non-empty one on the page -- the MRP. That is how this adapter came to report Rs 84,999
+    for a phone Amazon was selling at Rs 61,480, and Rs 4,990 for Rs 799 earbuds. The
+    number looked plausible every time, which is exactly what made it dangerous.
+    """
+    for node in soup.select("span.priceToPay, span.apex-pricetopay-value"):
+        # The screen-reader copy when it has one, since it is unambiguous.
+        offscreen = node.select_one(".a-offscreen")
+        if offscreen is not None:
+            price = parse_price(offscreen.get_text(strip=True))
+            if price is not None:
+                return price
+
+        whole = node.select_one(".a-price-whole")
+        if whole is None:
+            continue
+        fraction = node.select_one(".a-price-fraction")
+        digits = whole.get_text(strip=True).rstrip(".,")
+        if fraction is not None:
+            digits = f"{digits}.{fraction.get_text(strip=True)}"
+        price = parse_price(digits)
+        if price is not None:
+            return price
+    return None
 
 
 class AmazonAdapter(DomainMatchAdapter):
@@ -136,7 +175,7 @@ class AmazonAdapter(DomainMatchAdapter):
 
         identifier = self._asin(response.url) or self._asin(url)
         name = selector_config.select_text(soup, selectors.name)
-        price = selector_config.select_price(soup, selectors.price)
+        price = read_price_to_pay(soup) or selector_config.select_price(soup, selectors.price)
         image = selector_config.select_image(soup, selectors.image, response.url)
 
         availability = selector_config.select_availability(soup, selectors)

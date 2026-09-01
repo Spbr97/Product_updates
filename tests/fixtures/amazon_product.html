@@ -1,12 +1,10 @@
 <!doctype html>
 <html><head><title>Samsung Galaxy S25 5G</title></head>
 <body>
-<!-- Cross-sell tiles come FIRST in the document and carry their own prices. A page-wide
-     .a-price selector matches these and reports another product's price entirely. -->
+<!-- Cross-sell tiles come FIRST in the document and carry their own prices. -->
 <div id="sims-consolidated-1_feature_div">
   <h1>Add to your order</h1>
-  <span class="a-price"><span class="a-offscreen">₹61,480.00</span></span>
-  <span class="a-price"><span class="a-offscreen">₹1,299.00</span></span>
+  <span class="a-price"><span class="a-offscreen">&#8377;1,299.00</span></span>
 </div>
 
 <h1 id="title"><span id="productTitle">
@@ -14,9 +12,18 @@
 </span></h1>
 
 <div id="corePriceDisplay_desktop_feature_div">
-  <!-- Amazon leads with an empty a-offscreen node; the real price is the next one. -->
-  <span class="a-price"><span class="a-offscreen"></span></span>
-  <span class="a-price"><span class="a-offscreen">₹84,999</span></span>
+  <!-- What you pay. Its .a-offscreen is EMPTY: the digits are in whole/fraction. -->
+  <span class="a-price priceToPay apex-pricetopay-value">
+    <span class="a-offscreen"></span>
+    <span class="a-price-symbol">&#8377;</span>
+    <span class="a-price-whole">61,480<span class="a-price-decimal">.</span></span>
+    <span class="a-price-fraction">00</span>
+  </span>
+  <!-- The struck-out MRP. The only readable .a-offscreen in this block, which is exactly
+       why a naive selector reported it as the price. -->
+  <span class="a-price a-text-price apex-basisprice-value">
+    <span class="a-offscreen">&#8377;84,999</span>
+  </span>
 </div>
 
 <div id="availability"><span class="a-color-success">In stock</span></div>

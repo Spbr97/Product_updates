@@ -178,6 +178,10 @@ class ProductGroup(Base):
     slug: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     brand: Mapped[str | None] = mapped_column(String(100))
+    #: phone, earbuds, powerbank... Decides which specifications are read from a title and
+    #: which are worth showing. Nullable: detected on first attach, and a group whose kind
+    #: cannot be told is not an error.
+    category: Mapped[str | None] = mapped_column(String(32))
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(

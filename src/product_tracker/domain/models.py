@@ -293,6 +293,8 @@ class ComparisonMatrix:
     store_names: dict[str, str]
     rows: tuple[ComparisonRow, ...]
     generated_at: datetime
+    #: phone, earbuds, powerbank... decides which specifications are worth a column.
+    category: str | None = None
     #: Set when listings report different currencies. Prices are never converted, so the
     #: "best price" across currencies would be meaningless -- this says so out loud.
     currencies: tuple[str, ...] = ()

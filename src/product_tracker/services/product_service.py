@@ -15,7 +15,7 @@ from ..core.config import Settings
 from ..core.logging import get_logger
 from ..db.models import Product, Store, Subscription
 from ..domain.enums import TrackingStatus
-from ..domain.errors import DuplicateError, NotFoundError
+from ..domain.errors import DuplicateError, NotFoundError, QuotaExceededError
 from ..repositories.products import ProductRepository
 from ..repositories.stores import StoreRepository
 from ..repositories.users import SubscriptionRepository
@@ -86,6 +86,8 @@ class ProductService:
 
         # Two separate questions: which retailer is this (by domain), and which adapter
         # reads it. Several named stores share the generic adapter.
+        self._check_quota()
+
         store_info = resolve_store(validated)
         adapter = self.registry.resolve(validated)
         store = self._store_row(store_info.slug)
@@ -108,6 +110,18 @@ class ProductService:
             url_host=host_of(validated),
         )
         return product
+
+    def _check_quota(self) -> None:
+        """Refuse before creating, not after.
+
+        Checked only when adding something new: joining a listing somebody else already
+        tracks costs a retailer nothing extra, but it still counts towards the ceiling, so
+        the count is of subscriptions rather than of rows this user created.
+        """
+        limit = self.settings.max_listings_per_user
+        watching = len(self.subscriptions.product_ids_for(self._owner_id()))
+        if watching >= limit:
+            raise QuotaExceededError("tracked listings", limit)
 
     def _owner_id(self) -> int:
         """The account acting. Falls back to the default one for unattributed callers."""

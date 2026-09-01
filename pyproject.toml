@@ -44,7 +44,11 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-product_tracker = ["stores/selectors/*.yaml", "stores/searches/*.yaml"]
+product_tracker = [
+  "stores/selectors/*.yaml",
+  "stores/searches/*.yaml",
+  "services/spec_profiles/*.yaml",
+]
 
 [tool.pytest.ini_options]
 # "." as well as "src": test modules share helpers via `from tests.unit... import`,

@@ -1,4 +1,4 @@
-"""Working out which model and colour a listing is, from its title.
+"""Working out which model a listing is, from its title.
 
 Stores do not publish a variant identifier we can rely on, so the title is what we have:
 
@@ -9,177 +9,130 @@ Stores do not publish a variant identifier we can rely on, so the title is what 
 All three are one variant. Reading them as three would split a model across shops and make
 the comparison grid useless, which is the whole reason the variant table exists.
 
-This is a *suggestion engine*, deliberately. It proposes a label; a human confirms or
-overrides it. Inference that silently mis-groups two models is worse than no inference,
-so everything here is conservative: anything it cannot read with confidence it leaves out
-rather than guessing, and an empty result is a perfectly good answer.
+*What* distinguishes one model from another depends on the kind of product, so the reading
+itself lives in :mod:`specs`, one profile per category. This module is the part that turns
+what was read into a stable label -- and the part that knows when to give up.
+
+That last point is deliberate. This is a *suggestion engine*: it proposes a label and a
+human confirms it. Inference that silently mis-groups two products is worse than no
+inference, so anything it cannot read with confidence it leaves out, and an empty result is
+a perfectly good answer.
 """
 
 from __future__ import annotations
 
 import re
-import unicodedata
 
-# Capacity, with the unit attached or spaced. Deliberately not matching bare numbers.
-_CAPACITY = re.compile(r"(?<![\w.])(\d{1,4})\s*(GB|TB|MB)\b", re.IGNORECASE)
+from . import specs
 
-# "8GB RAM", "RAM 8 GB" -- the capacity that is memory, not storage.
-_RAM_TOKEN = re.compile(r"\bRAM\b", re.IGNORECASE)
+#: Fields that read as a size, ordered smallest unit first, for sorting rows.
+_CAPACITY = re.compile(r"(?<![\w.])(\d[\d,]*)\s*(GB|TB|MB|mAh)\b", re.IGNORECASE)
 
-# "256GB ROM", "256 GB Storage", "512GB SSD" -- an explicit statement that it *is* storage.
-_STORAGE_TOKEN = re.compile(r"\b(ROM|Storage|SSD|HDD|Internal)\b", re.IGNORECASE)
+_UNIT_SCALE = {"MB": 0.001, "GB": 1.0, "TB": 1024.0, "MAH": 0.001}
 
-#: Longest-first so "Space Black" wins over "Black" and "Rose Gold" over "Gold".
-_COLOURS: tuple[str, ...] = (
-    "Desert Titanium", "Natural Titanium", "Black Titanium", "White Titanium",
-    "Blue Titanium", "Silver Shadow", "Space Black", "Space Grey", "Space Gray",
-    "Midnight Blue",
-    "Midnight Black", "Pacific Blue", "Sierra Blue", "Alpine Green", "Rose Gold",
-    "Starlight", "Ultramarine", "Lavender", "Midnight", "Graphite", "Titanium",
-    "Charcoal", "Burgundy", "Platinum", "Turquoise", "Champagne", "Sapphire",
-    "Obsidian", "Magenta", "Crimson", "Emerald", "Lilac", "Violet", "Purple",
-    "Yellow", "Orange", "Silver", "Golden", "Bronze", "Copper", "Indigo",
-    "Maroon", "Green", "Black", "White", "Blue", "Beige", "Cream", "Coral",
-    "Peach", "Ivory", "Khaki", "Olive", "Sage", "Grey", "Gray", "Pink", "Gold",
-    "Teal", "Mint", "Navy", "Sand", "Rose", "Plum", "Cyan", "Red",
-)
-
-_COLOUR_PATTERN = re.compile(
-    r"\b(" + "|".join(re.escape(colour) for colour in _COLOURS) + r")\b", re.IGNORECASE
-)
-
-_UNIT_TO_GB = {"MB": 0.001, "GB": 1.0, "TB": 1024.0}
-
-_ORDERED_KEYS = ("storage", "colour", "color", "size")
+#: Reading order when no category is known: the fields people say out loud first.
+_CONVENTIONAL_ORDER = ("capacity", "storage", "colour", "color", "size")
 
 
-def _normalise(text: str) -> str:
-    """Fold accents and collapse whitespace so matching is not defeated by typography."""
-    folded = unicodedata.normalize("NFKD", text)
-    stripped = "".join(ch for ch in folded if not unicodedata.combining(ch))
-    return re.sub(r"\s+", " ", stripped).strip()
-
-
-def _ram_indices(text: str, spans: list[tuple[int, int]]) -> set[int]:
-    """Which capacity matches are memory rather than storage.
-
-    Each occurrence of "RAM" claims the *single nearest* capacity, rather than every
-    capacity within some window. A window is the obvious approach and it is wrong: in
-    "8GB RAM, 256GB Storage" the word RAM sits close to both numbers, so a window discards
-    the storage figure too and the title yields no storage at all.
-    """
-    claimed: set[int] = set()
-    for token in _RAM_TOKEN.finditer(text):
-        best: tuple[int, int] | None = None
-        for index, (start, end) in enumerate(spans):
-            if index in claimed:
-                continue
-            distance = min(abs(token.start() - end), abs(start - token.end()))
-            if best is None or distance < best[0]:
-                best = (distance, index)
-        if best is not None:
-            claimed.add(best[1])
-    return claimed
-
-
-def infer_storage(title: str) -> str | None:
-    """The storage capacity, normalised to "256GB". None when unreadable."""
-    text = _normalise(title)
-    matches = list(_CAPACITY.finditer(text))
-    if not matches:
-        return None
-
-    spans = [(m.start(), m.end()) for m in matches]
-    ram = _ram_indices(text, spans)
-
-    def rendered(match: re.Match[str]) -> str:
-        return f"{int(match.group(1))}{match.group(2).upper()}"
-
-    def size_gb(match: re.Match[str]) -> float:
-        return int(match.group(1)) * _UNIT_TO_GB[match.group(2).upper()]
-
-    # An explicit "ROM"/"Storage"/"SSD" just after a capacity settles it outright.
-    for index, match in enumerate(matches):
-        if index in ram:
-            continue
-        if _STORAGE_TOKEN.search(text[match.end() : match.end() + 12]):
-            return rendered(match)
-
-    candidates = [m for i, m in enumerate(matches) if i not in ram]
-    if not candidates:
-        return None
-    # Largest wins: where several survive, storage is the bigger figure on every consumer
-    # device we are likely to see.
-    return rendered(max(candidates, key=size_gb))
-
-
-def infer_colour(title: str) -> str | None:
-    """The colour, in title case. None when no known colour appears."""
-    match = _COLOUR_PATTERN.search(_normalise(title))
-    if match is None:
-        return None
-    return " ".join(word.capitalize() for word in match.group(1).split())
-
-
-def infer_variant(title: str | None) -> tuple[str | None, dict[str, str]]:
+def infer_variant(
+    title: str | None, category: str | None = None
+) -> tuple[str | None, dict[str, str]]:
     """Propose ``(label, attributes)`` for a listing title.
 
     Returns ``(None, {})`` when nothing recognisable is found -- the caller should then ask
-    rather than invent a label.
+    rather than invent a label. ``category`` overrides detection, for a group whose kind
+    somebody has already established.
     """
     if not title:
         return None, {}
 
-    attributes: dict[str, str] = {}
-    if storage := infer_storage(title):
-        attributes["storage"] = storage
-    if colour := infer_colour(title):
-        attributes["colour"] = colour
-
+    resolved, attributes = specs.read_specs(title, category)
     if not attributes:
         return None, {}
-    return variant_label(attributes), attributes
+
+    label = variant_label(attributes, resolved)
+    return (label or None), attributes
 
 
-def variant_label(attributes: dict[str, str]) -> str:
-    """Render attributes as a stable label: "256GB / Lavender".
-
-    Storage first, then colour, then anything else alphabetically -- so the same attributes
-    always produce the same label regardless of dict ordering, which matters because the
-    label carries a uniqueness constraint.
-    """
-    ordered: list[str] = [str(attributes[k]) for k in _ORDERED_KEYS if attributes.get(k)]
-    ordered += [str(attributes[k]) for k in sorted(attributes) if k not in _ORDERED_KEYS]
-    return " / ".join(ordered)
-
-
-def sort_position(attributes: dict[str, str]) -> int:
-    """Display order: by storage ascending, so 128GB precedes 1TB rather than following it.
-
-    Alphabetical ordering puts "1TB" between "128GB" and "256GB", which looks like a bug to
-    anyone reading the table.
-    """
-    storage = attributes.get("storage")
-    if not storage:
-        return 0
-    match = _CAPACITY.match(storage)
-    if match is None:
-        return 0
-    return int(int(match.group(1)) * _UNIT_TO_GB[match.group(2).upper()])
-
-
-def infer_variant_from_url(url: str | None) -> tuple[str | None, dict[str, str]]:
+def infer_variant_from_url(
+    url: str | None, category: str | None = None
+) -> tuple[str | None, dict[str, str]]:
     """Read a variant out of a URL slug: ".../apple-iphone-17-256gb-black-/p/317396".
 
-    This matters most for the shops that block us. Croma serves nothing we can parse, so
-    the listing has no title at all -- but the retailer still wrote the model and colour
-    into the path, and reading what they published there is not the same as guessing.
+    This matters most for the shops that block us. Croma serves nothing we can parse, so the
+    listing has no title at all -- but the retailer still wrote the model and colour into the
+    path, and reading what they published there is not the same as guessing.
 
-    Weaker evidence than a title, so it is only consulted as a fallback. Numeric path
-    segments cannot be mistaken for capacities: a capacity requires its unit.
+    Weaker evidence than a title, so it is only consulted as a fallback.
     """
     if not url:
         return None, {}
     path = url.split("://", 1)[-1]
-    # Hyphens and slashes are word separators in a slug; underscores too.
-    return infer_variant(re.sub(r"[-_/+]+", " ", path))
+    return infer_variant(re.sub(r"[-_/+]+", " ", path), category)
+
+
+def variant_label(attributes: dict[str, str], category: str | None = None) -> str:
+    """Render attributes as a stable label: "256GB / Lavender".
+
+    Only the fields the category says *name* a model are used -- a phone's storage and
+    colour, an earbud's colour. RAM is read and displayed but does not go in the label,
+    because two phones differing only in RAM are still listed as one model by most shops.
+
+    The order comes from the profile rather than from dict ordering, which matters because
+    the label carries a uniqueness constraint: the same attributes must always produce the
+    same label.
+    """
+    if category is None:
+        # No category means "use everything, in a stable order" rather than "use a
+        # category's naming fields" -- a caller who has not established what the product
+        # is should not silently lose its storage size.
+        ordered = [attributes[key] for key in _CONVENTIONAL_ORDER if attributes.get(key)]
+        ordered += [
+            attributes[key] for key in sorted(attributes) if key not in _CONVENTIONAL_ORDER
+        ]
+        return " / ".join(ordered)
+
+    wanted = specs.label_fields(category)
+    ordered = [attributes[name] for name in wanted if attributes.get(name)]
+    if not ordered:
+        # A category whose naming fields are all absent still deserves a label if anything
+        # was read at all -- otherwise a perfectly good reading is thrown away.
+        ordered = [attributes[key] for key in sorted(attributes)]
+    return " / ".join(ordered)
+
+
+def sort_position(attributes: dict[str, str]) -> int:
+    """Display order: by size ascending, so 128GB precedes 1TB rather than following it.
+
+    Alphabetical ordering puts "1TB" between "128GB" and "256GB", and "20000mAh" before
+    "5000mAh", both of which look like bugs to anyone reading the table.
+    """
+    for value in attributes.values():
+        match = _CAPACITY.match(value)
+        if match is not None:
+            amount = int(match.group(1).replace(",", ""))
+            return int(amount * _UNIT_SCALE[match.group(2).upper()])
+    return 0
+
+
+def infer_storage(title: str) -> str | None:
+    """The storage capacity, normalised to "256GB". None when unreadable.
+
+    Kept as a named function because the rule it applies is worth testing on its own: each
+    "RAM" token claims the single *nearest* capacity, so "8GB RAM, 256GB Storage" yields
+    256GB rather than nothing.
+    """
+    _category, attributes = specs.read_specs(title, "phone")
+    return attributes.get("storage")
+
+
+def infer_colour(title: str) -> str | None:
+    """The colour, in title case. None when no known colour appears."""
+    _category, attributes = specs.read_specs(title, specs.GENERIC)
+    return attributes.get("colour")
+
+
+# Re-exported so callers that only care about categories need not import both modules.
+detect_category = specs.detect_category
+render_specs = specs.render_specs
+display_fields = specs.display_fields

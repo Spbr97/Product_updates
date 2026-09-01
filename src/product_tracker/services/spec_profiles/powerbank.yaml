@@ -1,0 +1,28 @@
+# Power banks.
+#
+# Capacity in mAh is the headline number and the one people compare; output wattage is the
+# second. The mAh pattern allows a comma because shops write both "20000mAh" and
+# "20,000 mAh" -- and note this capacity is NOT the GB rule phones use.
+
+category: powerbank
+match:
+  - '\bpower\s?bank\b'
+  - '\d[\d,]*\s*mah\b'
+
+fields:
+  capacity:
+    kind: measure
+    label: Capacity
+    pattern: '(\d[\d,]{2,})\s*mah\b'
+    unit: mAh
+  output:
+    kind: measure
+    label: Output
+    pattern: '(\d{1,3}(?:\.\d)?)\s*w\b'
+    unit: W
+  colour:
+    kind: colour
+    label: Colour
+
+label: [capacity, colour]
+display: [capacity, output]
