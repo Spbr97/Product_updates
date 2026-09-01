@@ -36,7 +36,7 @@ from ..domain.models import FetchContext, SearchHit, SearchResult
 from ..utils.money import parse_price
 from ..utils.urls import host_of
 from . import browser as browser_module
-from . import robots
+from . import robots, sitemaps
 from .http import FetchSuccess
 from .http import fetch as http_fetch
 
@@ -44,9 +44,15 @@ log = get_logger(__name__)
 
 SEARCH_DIR = Path(__file__).parent / "searches"
 
-#: Words that name a *different model*, not a variation of the same one. A title carrying
-#: one of these that the query did not ask for is a different phone, and the ranking says
-#: so rather than quietly scoring it as a near-match.
+#: Words that mean "this is not the thing you asked for". A title carrying one that the
+#: query did not is a *different product*, and the ranking says so rather than quietly
+#: scoring it as a match.
+#:
+#: Two kinds, and both matter. Model qualifiers separate a Galaxy S25 from a Galaxy S25 FE.
+#: Accessory words separate a phone from a case for that phone -- which matters most where
+#: there is no relevance ranking to lean on: a store's sitemap lists "Samsung Galaxy S25
+#: Silicone Case" and the phone itself as equally good answers to "Galaxy S25", and without
+#: this the cases win on being listed first.
 MODEL_QUALIFIERS: frozenset[str] = frozenset(
     {
         "fe", "pro", "max", "plus", "ultra", "mini", "air", "lite", "neo",
@@ -54,6 +60,22 @@ MODEL_QUALIFIERS: frozenset[str] = frozenset(
         "renewed", "unlocked",
     }
 )
+
+#: Only unambiguous ones. "display", "unit", "glass" and "band" were here and had to go:
+#: a phone's own title describes its display, so every real phone came back flagged as an
+#: accessory. A word earns its place here only if a product title containing it is
+#: essentially never the product itself.
+ACCESSORY_WORDS: frozenset[str] = frozenset(
+    {
+        "case", "cases", "cover", "covers", "protector", "protectors",
+        "film", "tempered", "charger", "cable", "adapter", "stand",
+        "holder", "mount", "skin", "pouch", "sleeve", "strap", "dock",
+        "grip", "stylus", "demo", "dummy", "spare",
+    }
+)
+
+#: Everything that disqualifies a title from being an exact answer.
+DISQUALIFYING_WORDS: frozenset[str] = MODEL_QUALIFIERS | ACCESSORY_WORDS
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 
@@ -78,9 +100,10 @@ def score_title(query: str, title: str) -> tuple[float, tuple[str, ...]]:
     """How well ``title`` answers ``query``, and which extra model words it carries.
 
     The score is the fraction of the query's words present in the title. The qualifiers are
-    the model-naming words in the title that the query did not ask for; they do not lower
-    the score, they are reported alongside it, because "is an S25 FE close enough to an
-    S25?" is a question for the person searching and not for a ranking function.
+    the words in the title that mean it is a different product -- a different model, or an
+    accessory for the model asked about. They do not lower the score, they are reported
+    alongside it, because "is an S25 FE close enough to an S25?" is a question for the
+    person searching and not for a ranking function to answer silently.
     """
     wanted = tokenise(query)
     if not wanted:
@@ -89,7 +112,7 @@ def score_title(query: str, title: str) -> tuple[float, tuple[str, ...]]:
 
     matched = sum(1 for token in wanted if token in present)
     extra = tuple(
-        sorted(token for token in present & MODEL_QUALIFIERS if token not in set(wanted))
+        sorted(token for token in present & DISQUALIFYING_WORDS if token not in set(wanted))
     )
     return matched / len(wanted), extra
 
@@ -142,6 +165,12 @@ class SearchConfig:
     #: "http" (default), "auto" (HTTP first, render when unreadable), or "browser"
     #: (render straight away, for shops verified to publish nothing without JavaScript).
     render: str = "http"
+    #: Where this store's sitemap lives. "" means "ask robots.txt"; "none" disables it.
+    sitemap: str = ""
+    #: Regex picking the product children out of a sitemap index, so we do not pull the
+    #: brand, category and blog sitemaps looking for products.
+    sitemap_include: str = "product"
+    sitemap_max_files: int = 20
     #: What to wait for once rendered. Worth setting whenever the results have a known
     #: shape: it returns as soon as they exist instead of sleeping a fixed interval.
     wait_for: str | None = None
@@ -150,6 +179,17 @@ class SearchConfig:
     @property
     def may_render(self) -> bool:
         return self.render in _RENDER_MODES - {"http"}
+
+    @property
+    def has_sitemap(self) -> bool:
+        return self.sitemap.strip().lower() != "none"
+
+    def sitemap_spec(self) -> sitemaps.SitemapSpec:
+        return sitemaps.SitemapSpec(
+            index_url="" if self.sitemap.lower() in {"", "auto", "none"} else self.sitemap,
+            include=self.sitemap_include,
+            max_files=self.sitemap_max_files,
+        )
 
 
 def _as_tuple(value: object) -> tuple[str, ...]:
@@ -172,6 +212,9 @@ _KNOWN_KEYS = frozenset(
         "result_link",
         "render",
         "wait_for",
+        "sitemap",
+        "sitemap_include",
+        "sitemap_max_files",
         "title",
         "brand",
         "price",
@@ -217,6 +260,9 @@ def load_search_config(slug: str) -> SearchConfig:
         image=_as_tuple(raw.get("image")),
         result_card=raw.get("result_card"),
         render=str(raw.get("render", "http")),
+        sitemap=str(raw.get("sitemap", "")),
+        sitemap_include=str(raw.get("sitemap_include", "product")),
+        sitemap_max_files=int(raw.get("sitemap_max_files", 20)),
         wait_for=raw.get("wait_for"),
         notes=raw.get("notes"),
     )
@@ -430,3 +476,83 @@ def search_for(slug: str) -> StoreSearch | None:
     if slug not in available_searches():
         return None
     return ConfiguredSearch(slug)
+
+
+class SitemapSearch(StoreSearch):
+    """Finds products in the sitemap a store publishes, rather than by searching it.
+
+    This is the route for shops whose search we must not crawl (their robots.txt says so)
+    or cannot read (their results are built by JavaScript). It asks a retailer for one
+    static file instead of a rendered query, and after the first call it asks for nothing
+    at all until the cache expires.
+
+    The trade is that a sitemap carries URLs and nothing else. Titles here are derived from
+    the URL slug and there are no prices, so every hit is marked ``from_sitemap``; the real
+    title and price arrive with the first check of a tracked listing.
+    """
+
+    def __init__(self, slug: str) -> None:
+        self.slug = slug  # type: ignore[misc]
+
+    @property
+    def config(self) -> SearchConfig:
+        return load_search_config(self.slug)
+
+    def search(
+        self,
+        query: str,
+        ctx: FetchContext,
+        *,
+        limit: int = 10,
+        use_browser: bool = False,
+    ) -> SearchResult:
+        config = self.config
+        if not config.has_sitemap:
+            return SearchResult.failure(
+                self.slug, SearchOutcome.UNSUPPORTED, "no sitemap configured for this store"
+            )
+
+        base = config.url_template.format(query="x")
+        urls = sitemaps.product_urls(
+            self.slug, config.sitemap_spec(), config.product_url_pattern, base, ctx
+        )
+        if not urls:
+            # Could not look, which is not the same as having looked and found nothing.
+            return SearchResult.failure(
+                self.slug,
+                SearchOutcome.PAGE_STRUCTURE,
+                "the store's sitemap could not be read, so its catalogue was not searched",
+            )
+
+        hits: list[SearchHit] = []
+        for url in urls:
+            words = sitemaps.slug_words(url)
+            if not words:
+                continue
+            score, qualifiers = score_title(query, words)
+            if score < 1.0:
+                # Every word asked for must appear. A sitemap has no relevance ranking of
+                # its own, so a partial match here is noise rather than a near miss.
+                continue
+            hits.append(
+                SearchHit(
+                    url=url,
+                    title=sitemaps.title_from_slug(url),
+                    store_slug=self.slug,
+                    score=score,
+                    qualifiers=qualifiers,
+                    from_sitemap=True,
+                )
+            )
+
+        hits.sort(key=lambda hit: (len(hit.qualifiers), len(hit.title)))
+        log.info("search.sitemap", store=self.slug, catalogue=len(urls), hits=len(hits))
+        if not hits:
+            return SearchResult(
+                store_slug=self.slug,
+                outcome=SearchOutcome.NO_RESULTS,
+                message=f"nothing matching in {len(urls)} catalogued products",
+            )
+        return SearchResult(
+            store_slug=self.slug, outcome=SearchOutcome.OK, hits=tuple(hits[:limit])
+        )

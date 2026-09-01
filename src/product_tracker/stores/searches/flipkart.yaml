@@ -7,7 +7,20 @@
 #
 # When extraction starts failing, update the class names below. No Python change needed.
 
+# NOTE: robots.txt says `Disallow: /search?`, so this URL is never fetched -- the
+# search reports DISALLOWED. It stays here because it is the store's real search URL
+# and the selectors below are verified; if Flipkart ever permits it, nothing else
+# changes. Discovery happens through the sitemap instead.
 url: "https://www.flipkart.com/search?q={query}"
+
+# No sitemap route either, and it is worth writing down why. Flipkart advertises six
+# product *indexes*, and each one lists about 599 gzipped child sitemaps -- roughly 3,600
+# files covering an entire marketplace. Sitemaps are built for a crawler that walks the lot
+# over weeks, not for looking one product up: fetching the twenty files a cap would allow
+# samples half a percent of the catalogue at random and answers "not found" for almost
+# everything. Better to say we cannot look than to look somewhere useless and report a
+# confident absence.
+sitemap: "none"
 
 product_url_pattern: "/p/itm"
 

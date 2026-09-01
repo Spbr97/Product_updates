@@ -1,0 +1,24 @@
+# Reliance Digital.
+#
+# Its robots.txt disallows crawling search, and its results are built with JavaScript
+# anyway, so there is no search here to speak of -- the URL below exists only so the store
+# has a base to resolve its sitemap against, and fetching it reports DISALLOWED.
+#
+# Discovery is entirely through the sitemap, which the site advertises and which lists its
+# catalogue across sixteen product files of five hundred URLs each.
+
+url: "https://www.reliancedigital.in/search?q={query}"
+
+product_url_pattern: "/product/"
+
+sitemap: "https://www.reliancedigital.in/sitemap.xml"
+sitemap_include: "products/"
+sitemap_max_files: 16
+
+result_card: "div.product-card"
+result_link:
+  - "a[href*='/product/']"
+title:
+  - "h3"
+price:
+  - "div.price"

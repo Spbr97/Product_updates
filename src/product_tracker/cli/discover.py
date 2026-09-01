@@ -49,16 +49,27 @@ def _hits_table(hits: tuple[SearchHit, ...], title: str) -> None:
     for index, hit in enumerate(hits, start=1):
         match = f"{hit.score:.0%}"
         if hit.qualifiers:
-            # The word that makes this a different phone, not a different colour.
+            # The word that makes this a different phone -- or a case for it.
             match += f" [yellow]+{'/'.join(hit.qualifiers)}[/yellow]"
+        name = hit.title[:58]
+        if hit.from_sitemap:
+            # Say where it came from. This name was read off the URL, not published by the
+            # shop, and presenting a derived name as the retailer's own would be a small
+            # lie that the rest of this tool works hard not to tell.
+            name = f"{name} [dim](from catalogue)[/dim]"
         listing.add_row(
             str(index),
             _store_name(hit.store_slug),
             format_money_short(hit.price, hit.currency),
             match,
-            hit.title[:58],
+            name,
         )
     stdout.print(listing)
+    if any(hit.from_sitemap for hit in hits):
+        stdout.print(
+            "  [dim]Catalogue rows have no price yet: a shop's sitemap lists URLs, not "
+            "prices. Their real title and price arrive with the first check.[/dim]"
+        )
 
 
 def _report_gaps(results: tuple[SearchResult, ...]) -> None:

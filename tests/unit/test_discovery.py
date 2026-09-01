@@ -153,7 +153,13 @@ def unreadable(store: str) -> SearchResult:
 class EscalationHarness:
     """Wires fake stores and a fake browser into ``discover``."""
 
-    def __init__(self, monkeypatch, searches: dict[str, FakeSearch], render_modes: dict[str, str]):  # type: ignore[no-untyped-def]
+    def __init__(  # type: ignore[no-untyped-def]
+        self,
+        monkeypatch,
+        searches: dict[str, FakeSearch],
+        render_modes: dict[str, str],
+        sitemaps: dict[str, str] | None = None,
+    ):
         import contextlib
 
         from product_tracker.services import discovery as module
@@ -161,6 +167,7 @@ class EscalationHarness:
 
         self.searches = searches
         self.sessions = 0
+        sitemaps = sitemaps or {}
 
         @contextlib.contextmanager
         def fake_session(**_kwargs: object):  # type: ignore[no-untyped-def]
@@ -173,6 +180,9 @@ class EscalationHarness:
                 result_link=(),
                 product_url_pattern="/p/",
                 render=render_modes.get(slug, "http"),
+                # These tests are about the render escalation. Catalogues are off unless a
+                # test asks for them, so a sitemap pass cannot quietly answer instead.
+                sitemap=sitemaps.get(slug, "none"),
             )
 
         monkeypatch.setattr(module, "search_for", lambda slug: searches.get(slug))

@@ -23,6 +23,7 @@ from ..stores import browser
 from ..stores.catalogue import KNOWN_STORES
 from ..stores.search import (
     SearchConfig,
+    SitemapSearch,
     available_searches,
     load_search_config,
     search_for,
@@ -139,6 +140,20 @@ def discover(
             )
             discovery = Discovery(query=query, results=tuple(results.values()))
 
+    # Last, the catalogues. This runs whenever a store failed to answer -- *not* only when
+    # nothing was found anywhere, which is the gate the render pass uses.
+    #
+    # The difference matters and it took seeing the output to notice. This is a price
+    # comparison tool: "Amazon has it" is not the answer, "here is what each shop charges"
+    # is. Gating on "no exact match anywhere" meant the first shop to answer suppressed
+    # every other shop, and a comparison across six retailers quietly became a quote from
+    # one. The cost is affordable precisely here: a catalogue is one static file the shop
+    # publishes for crawlers, cached for a day, and never their search.
+    catalogues = _worth_cataloguing(results)
+    if catalogues:
+        results.update(_sitemap_pass(catalogues, query, ctx, limit_per_store))
+        discovery = Discovery(query=query, results=tuple(results.values()))
+
     log.info(
         "discovery.completed",
         query_length=len(query),
@@ -175,6 +190,45 @@ def _worth_rendering(results: dict[str, SearchResult]) -> tuple[str, ...]:
         if config is not None and config.may_render:
             retry.append(slug)
     return tuple(retry)
+
+
+def _worth_cataloguing(results: dict[str, SearchResult]) -> tuple[str, ...]:
+    """Stores whose sitemap might answer what their search could not.
+
+    Includes DISALLOWED, which is the important case: a shop that asks us not to crawl its
+    search still publishes a catalogue for crawlers to read, so respecting the first does
+    not mean giving up on the second.
+    """
+    wanted = {
+        SearchOutcome.DISALLOWED,
+        SearchOutcome.PAGE_STRUCTURE,
+        SearchOutcome.BLOCKED,
+        SearchOutcome.NEEDS_BROWSER,
+        SearchOutcome.NO_RESULTS,
+    }
+    candidates: list[str] = []
+    for slug, result in results.items():
+        if result.outcome not in wanted:
+            continue
+        config = _render_mode(slug)
+        if config is not None and config.has_sitemap:
+            candidates.append(slug)
+    return tuple(candidates)
+
+
+def _sitemap_pass(
+    slugs: tuple[str, ...], query: str, ctx: FetchContext, limit: int
+) -> dict[str, SearchResult]:
+    """Look each store up in its own published catalogue."""
+    log.info("discovery.sitemap_pass", stores=len(slugs))
+    found: dict[str, SearchResult] = {}
+    for slug in slugs:
+        result = SitemapSearch(slug).search(query, ctx, limit=limit)
+        # Only replace the earlier answer when this one is better. A store that asked us
+        # not to crawl its search should keep saying so if its catalogue helps no more.
+        if result.succeeded:
+            found[slug] = result
+    return found
 
 
 def _render_mode(slug: str) -> SearchConfig | None:

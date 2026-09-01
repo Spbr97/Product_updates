@@ -18,7 +18,10 @@
 
 url: "https://www.vijaysales.com/search?q={query}"
 
-product_url_pattern: "/p/[0-9]"
+# Two shapes: accessories at /p/237198/slug and phones at /p/P237290/237287/slug. The
+# earlier "/p/[0-9]" matched only the first, so a search for a phone returned nothing but
+# cases and screen protectors for it.
+product_url_pattern: "/p/[A-Za-z]?[0-9]+/"
 
 # auto: try HTTP first, render only when that found nothing and nothing else matched.
 render: auto
@@ -39,3 +42,10 @@ title:
 price:
   - "span.discounted-price"
   - "div.price"
+
+# The way this store is actually searchable. Its sitemap index advertises a single
+# products-sitemap.xml holding the whole catalogue as static XML -- no rendering, no
+# crawling of a page they would rather we left alone.
+sitemap: "auto"
+sitemap_include: "products-sitemap"
+sitemap_max_files: 2

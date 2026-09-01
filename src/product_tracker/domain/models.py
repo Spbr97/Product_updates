@@ -335,6 +335,11 @@ class SearchHit:
     image_url: str | None = None
     score: float = 0.0
     qualifiers: tuple[str, ...] = ()
+    #: Found in the store's sitemap rather than by searching it. Such a hit has no price,
+    #: and its title is derived from the URL slug rather than published by the retailer --
+    #: both arrive with the first check. Flagged so nothing presents a derived name as if
+    #: the shop had said it.
+    from_sitemap: bool = False
 
     @property
     def is_exact(self) -> bool:
