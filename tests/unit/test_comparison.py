@@ -17,7 +17,7 @@ import pytest
 from product_tracker.db.models import Product
 from product_tracker.domain.enums import Availability, CellStatus, CheckStatus, FetchOutcome
 from product_tracker.domain.models import ComparisonCell, ComparisonRow
-from product_tracker.services.comparison import cell_for_product
+from product_tracker.services.comparison import _one_per_store, cell_for_product
 
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 
@@ -232,3 +232,65 @@ class TestRowArithmetic:
         # Only the genuinely buyable listing is a candidate.
         assert row.best_price == Decimal("82900")
         assert row.best_store_slugs == ("reliance",)
+
+
+class TestOneListingPerShop:
+    """A shop can carry the same model twice; the grid has one square for it."""
+
+    @staticmethod
+    def listing(product_id: int, store_slug: str, price: str | None) -> Product:
+        from product_tracker.db.models import Store
+
+        product = Product(
+            id=product_id,
+            url=f"https://{store_slug}.example/p/{product_id}",
+            url_canonical=f"https://{store_slug}.example/p/{product_id}",
+            store_id=1,
+            current_price=Decimal(price) if price else None,
+            currency="INR" if price else None,
+            availability=Availability.IN_STOCK,
+            last_checked_at=NOW,
+        )
+        product.store = Store(
+            id=1, slug=store_slug, name=store_slug.title(), domains=[], adapter_key="generic"
+        )
+        return product
+
+    def test_the_cheapest_listing_wins_the_square(self) -> None:
+        """That is the number a shopper acts on."""
+        chosen = _one_per_store(
+            [
+                self.listing(1, "flipkart", "84999"),
+                self.listing(2, "flipkart", "79999"),
+            ]
+        )
+        assert chosen["flipkart"].id == 2
+
+    def test_the_result_does_not_depend_on_row_order(self) -> None:
+        """Built by comprehension this kept whichever came last, so a listing vanished
+        from the comparison depending on query order -- silently, and only sometimes."""
+        pair = [self.listing(1, "flipkart", "84999"), self.listing(2, "flipkart", "79999")]
+        assert _one_per_store(pair)["flipkart"].id == _one_per_store(pair[::-1])["flipkart"].id
+
+    def test_a_priced_listing_beats_an_unpriced_one(self) -> None:
+        chosen = _one_per_store(
+            [self.listing(1, "flipkart", None), self.listing(2, "flipkart", "79999")]
+        )
+        assert chosen["flipkart"].id == 2
+
+    def test_an_unpriced_listing_never_displaces_a_priced_one(self) -> None:
+        chosen = _one_per_store(
+            [self.listing(1, "flipkart", "79999"), self.listing(2, "flipkart", None)]
+        )
+        assert chosen["flipkart"].id == 1
+
+    def test_equal_prices_settle_deterministically(self) -> None:
+        pair = [self.listing(7, "flipkart", "79999"), self.listing(3, "flipkart", "79999")]
+        assert _one_per_store(pair)["flipkart"].id == 3
+        assert _one_per_store(pair[::-1])["flipkart"].id == 3
+
+    def test_different_shops_keep_their_own_squares(self) -> None:
+        chosen = _one_per_store(
+            [self.listing(1, "flipkart", "79999"), self.listing(2, "samsung", "84999")]
+        )
+        assert set(chosen) == {"flipkart", "samsung"}

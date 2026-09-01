@@ -32,7 +32,8 @@ _STORAGE_TOKEN = re.compile(r"\b(ROM|Storage|SSD|HDD|Internal)\b", re.IGNORECASE
 #: Longest-first so "Space Black" wins over "Black" and "Rose Gold" over "Gold".
 _COLOURS: tuple[str, ...] = (
     "Desert Titanium", "Natural Titanium", "Black Titanium", "White Titanium",
-    "Blue Titanium", "Space Black", "Space Grey", "Space Gray", "Midnight Blue",
+    "Blue Titanium", "Silver Shadow", "Space Black", "Space Grey", "Space Gray",
+    "Midnight Blue",
     "Midnight Black", "Pacific Blue", "Sierra Blue", "Alpine Green", "Rose Gold",
     "Starlight", "Ultramarine", "Lavender", "Midnight", "Graphite", "Titanium",
     "Charcoal", "Burgundy", "Platinum", "Turquoise", "Champagne", "Sapphire",

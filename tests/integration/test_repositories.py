@@ -36,13 +36,16 @@ class TestStoreRepository:
         assert repo.get_by_slug("generic") is not None
 
     def test_sync_creates_new_stores(self, db_session: Session) -> None:
+        # A deliberately fictional retailer. This used to be "amazon-in", which stopped
+        # testing anything the day a migration started seeding that store for real: sync
+        # found it already present and created nothing.
         repo = StoreRepository(db_session)
         created, _ = repo.sync_from_registry(
-            [StoreInfo("amazon-in", "Amazon India", ("amazon.in",), "amazon")]
+            [StoreInfo("example-mart", "Example Mart", ("example-mart.test",), "generic")]
         )
 
         assert created == 1
-        assert repo.get_by_slug("amazon-in") is not None
+        assert repo.get_by_slug("example-mart") is not None
 
     def test_sync_is_idempotent(self, db_session: Session) -> None:
         repo = StoreRepository(db_session)

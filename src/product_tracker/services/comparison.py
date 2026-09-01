@@ -106,6 +106,39 @@ def _store_names(grid: GridData) -> dict[str, str]:
     return names
 
 
+def _one_per_store(products: list[Product]) -> dict[str, Product]:
+    """Pick one listing per shop for this model.
+
+    A shop can legitimately carry the same model twice -- two sellers, or two URLs for one
+    product -- and the grid has one square per shop. Building the mapping by comprehension
+    keeps whichever happened to come last, so a listing disappears from the comparison
+    depending on row order, which is the kind of thing nobody notices until a price looks
+    wrong.
+
+    The cheapest buyable one wins, because that is the number a shopper acts on. Listings
+    with no usable price never displace one that has a price.
+    """
+    chosen: dict[str, Product] = {}
+    for product in products:
+        slug = product.store.slug
+        current = chosen.get(slug)
+        if current is None or _prefer(product, current):
+            chosen[slug] = product
+    return chosen
+
+
+def _prefer(candidate: Product, incumbent: Product) -> bool:
+    """Whether ``candidate`` should replace ``incumbent`` in its shop's square."""
+    if candidate.current_price is None:
+        return False
+    if incumbent.current_price is None:
+        return True
+    if candidate.current_price != incumbent.current_price:
+        return candidate.current_price < incumbent.current_price
+    # Equal prices: settle on the lower id so the grid does not change between renders.
+    return candidate.id < incumbent.id
+
+
 def _build_row(
     variant: ProductVariant,
     grid: GridData,
@@ -115,7 +148,7 @@ def _build_row(
     now: datetime,
 ) -> ComparisonRow:
     products = grid.products_by_variant.get(variant.id, [])
-    by_store = {product.store.slug: product for product in products}
+    by_store = _one_per_store(products)
 
     cells: dict[str, ComparisonCell] = {}
     for slug in store_slugs:

@@ -56,6 +56,32 @@ KNOWN_STORES: tuple[StoreInfo, ...] = (
         domains=("croma.com",),
         adapter_key="generic",
     ),
+    # Verified 2026-09-01 against a live Galaxy S25 listing.
+    StoreInfo(
+        slug="samsung",
+        display_name="Samsung",
+        domains=("samsung.com",),
+        adapter_key="generic",
+    ),
+    StoreInfo(
+        slug="sangeetha",
+        display_name="Sangeetha Mobiles",
+        domains=("sangeethamobiles.com",),
+        adapter_key="generic",
+    ),
+    # Amazon *product* pages serve us; the homepage answers with an AWS WAF JavaScript
+    # challenge. The pages carry no JSON-LD and render their price with JavaScript, so
+    # checks land on PRICE_NOT_FOUND: we identify the listing and honestly report that we
+    # could not read a price. Listed anyway so those checks are attributed to Amazon
+    # instead of disappearing into "generic", and so the per-host circuit breaker treats
+    # Amazon's failures as Amazon's. Reading it properly needs an Amazon adapter; the
+    # WAF challenge is a security control and is not something to work around.
+    StoreInfo(
+        slug="amazon-in",
+        display_name="Amazon India",
+        domains=("amazon.in",),
+        adapter_key="generic",
+    ),
     StoreInfo(
         slug=GENERIC_SLUG,
         display_name="Other (schema.org)",
