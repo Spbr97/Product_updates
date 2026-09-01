@@ -96,3 +96,21 @@ _SUCCESS_OUTCOMES = frozenset(
 _TRANSIENT_OUTCOMES = frozenset(
     {FetchOutcome.TIMEOUT, FetchOutcome.HTTP_ERROR, FetchOutcome.ERROR}
 )
+
+
+class CellStatus(StrEnum):
+    """Why a comparison cell shows what it shows.
+
+    The whole point of this enum is that "no price" has several different meanings, and
+    flattening them into one blank cell would repeat -- in the UI this time -- the exact
+    mistake the tracker refuses to make in its data model. A shop that blocked us has told
+    us nothing about stock; a shop that is genuinely sold out has told us a great deal.
+    """
+
+    OK = "ok"  # A price we can stand behind.
+    OUT_OF_STOCK = "out_of_stock"  # Listing exists, confirmed not buyable.
+    NO_PRICE = "no_price"  # Checked, but no price could be read. Availability unknown.
+    BLOCKED = "blocked"  # The store refused the request. Says nothing about the product.
+    FAILED = "failed"  # Timeout, HTTP error, or a page we could not parse.
+    NEVER_CHECKED = "never_checked"  # Tracked, but no successful check yet.
+    NOT_TRACKED = "not_tracked"  # Nobody has added a URL for this variant at this store.

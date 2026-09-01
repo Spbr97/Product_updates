@@ -12,7 +12,14 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
-from .enums import Availability, FetchMethod, FetchOutcome, RuleType, TrackingStatus
+from .enums import (
+    Availability,
+    CellStatus,
+    FetchMethod,
+    FetchOutcome,
+    RuleType,
+    TrackingStatus,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,3 +216,100 @@ class CheckGuard(Protocol):
     def after(self, host: str, *, succeeded: bool) -> None:
         """Called after a fetch, with its outcome."""
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonCell:
+    """One (variant, store) square of the comparison grid."""
+
+    status: CellStatus
+    price: Decimal | None = None
+    currency: str | None = None
+    availability: Availability = Availability.UNKNOWN
+    product_id: int | None = None
+    url: str | None = None
+    last_checked_at: datetime | None = None
+    is_stale: bool = False
+    #: Movement since the previous recorded price, for an arrow in the UI.
+    previous_price: Decimal | None = None
+
+    @property
+    def has_price(self) -> bool:
+        return self.status is CellStatus.OK and self.price is not None
+
+    @property
+    def price_delta(self) -> Decimal | None:
+        if self.price is None or self.previous_price is None:
+            return None
+        return self.price - self.previous_price
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonRow:
+    """One model/colour, priced across every store."""
+
+    variant_id: int | None
+    label: str
+    attributes: dict[str, str] = field(default_factory=dict)
+    cells: dict[str, ComparisonCell] = field(default_factory=dict)
+
+    def _prices(self) -> list[Decimal]:
+        """Every price in the row. ``has_price`` already excludes None."""
+        return [c.price for c in self.cells.values() if c.has_price and c.price is not None]
+
+    @property
+    def best_price(self) -> Decimal | None:
+        prices = self._prices()
+        return min(prices) if prices else None
+
+    @property
+    def best_store_slugs(self) -> tuple[str, ...]:
+        """Every store at the best price -- ties are real and should not be hidden."""
+        best = self.best_price
+        if best is None:
+            return ()
+        return tuple(
+            slug for slug, cell in self.cells.items() if cell.has_price and cell.price == best
+        )
+
+    @property
+    def spread(self) -> Decimal | None:
+        """Cheapest to dearest -- what shopping around is actually worth."""
+        prices = self._prices()
+        if len(prices) < 2:
+            return None
+        return max(prices) - min(prices)
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonMatrix:
+    """A whole group priced across models and stores: the user-facing answer."""
+
+    group_slug: str
+    group_name: str
+    brand: str | None
+    store_slugs: tuple[str, ...]
+    store_names: dict[str, str]
+    rows: tuple[ComparisonRow, ...]
+    generated_at: datetime
+    #: Set when listings report different currencies. Prices are never converted, so the
+    #: "best price" across currencies would be meaningless -- this says so out loud.
+    currencies: tuple[str, ...] = ()
+
+    @property
+    def mixed_currency(self) -> bool:
+        return len(self.currencies) > 1
+
+    @property
+    def best_overall(self) -> tuple[ComparisonRow, str] | None:
+        """The cheapest (row, store) in the grid. Undefined across currencies."""
+        if self.mixed_currency:
+            return None
+        best: tuple[ComparisonRow, str] | None = None
+        for row in self.rows:
+            price = row.best_price
+            if price is None:
+                continue
+            if best is None or price < (best[0].best_price or price):
+                best = (row, row.best_store_slugs[0])
+        return best

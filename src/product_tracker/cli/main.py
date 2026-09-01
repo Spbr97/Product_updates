@@ -15,7 +15,7 @@ from .. import __version__
 from ..core.config import get_settings
 from ..core.logging import configure_logging
 from ..domain.errors import ConfigurationError
-from . import alerts, history, products, system, worker
+from . import alerts, groups, history, products, system, worker
 from .formatting import ExitCode, error, stdout
 
 app = typer.Typer(
@@ -35,6 +35,9 @@ app.command("show")(products.show)
 app.command("remove")(products.remove)
 app.command("check")(products.check)
 app.command("history")(history.history)
+
+app.add_typer(groups.groups_app, name="groups")
+app.command("compare")(groups.compare)
 
 app.add_typer(alerts.alerts_app, name="alerts")
 app.command("pause")(alerts.pause)

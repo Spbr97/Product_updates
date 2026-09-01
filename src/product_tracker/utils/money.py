@@ -160,3 +160,48 @@ def format_money(amount: Decimal | None, currency: str | None = None) -> str:
     if currency:
         return f"{amount:,.2f} {currency.upper()}"
     return f"{amount:,.2f}"
+
+
+def _indian_grouping(whole: str) -> str:
+    """Group digits the Indian way: 1299000 -> "12,99,000".
+
+    Every Indian retailer we read prices from writes them this way, so a comparison grid
+    that renders "1,299,000" makes the reader do conversion work to check it against the
+    shop's own page. The last three digits group together, then pairs.
+    """
+    if len(whole) <= 3:
+        return whole
+    head, tail = whole[:-3], whole[-3:]
+    parts: list[str] = []
+    while len(head) > 2:
+        parts.insert(0, head[-2:])
+        head = head[:-2]
+    if head:
+        parts.insert(0, head)
+    return ",".join([*parts, tail])
+
+
+def format_money_short(amount: Decimal | None, currency: str | None = None) -> str:
+    """Compact money for dense tables: "₹82,900", "$1,299.50".
+
+    Drops trailing ``.00`` -- in a grid of twenty prices the decimals are pure noise -- but
+    keeps real paise or cents, because silently rounding a price shown to a shopper is not
+    acceptable. Distinct from :func:`format_money`, which stays exact for detail views.
+    """
+    if amount is None:
+        return "-"
+
+    code = (currency or "").upper()
+    quantised = amount.normalize()
+    sign = "-" if quantised < 0 else ""
+    absolute = abs(quantised)
+
+    whole = int(absolute)
+    fraction = absolute - whole
+    digits = _indian_grouping(str(whole)) if code == "INR" else f"{whole:,}"
+    rendered = digits if fraction == 0 else f"{digits}{f'{fraction:.2f}'[1:]}"
+
+    symbol = _SYMBOL_FOR_CODE.get(code)
+    if symbol:
+        return f"{sign}{symbol}{rendered}"
+    return f"{sign}{rendered} {code}".strip()

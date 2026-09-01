@@ -84,6 +84,75 @@ class Store(Base):
     products: Mapped[list[Product]] = relationship(back_populates="store")
 
 
+class ProductGroup(Base):
+    """One real-world product, across every model, colour and shop that sells it.
+
+    A group is what a person means by "iPhone 17". The rows underneath it are the actual
+    listings: one per (variant, store). Without this, "iPhone 17 256GB Black on Flipkart"
+    and the same phone on Reliance are two unrelated rows and nothing can compare them.
+    """
+
+    __tablename__ = "product_groups"
+    __table_args__ = (UniqueConstraint("slug", name="uq_product_groups_slug"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    brand: Mapped[str | None] = mapped_column(String(100))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    variants: Mapped[list[ProductVariant]] = relationship(
+        back_populates="group",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ProductVariant.position, ProductVariant.label",
+    )
+
+
+class ProductVariant(Base):
+    """One model or colour within a group -- "256GB / Black".
+
+    This is the join point that makes cross-store comparison possible. Stores name the same
+    variant differently ("256 GB", "256GB", "Black", "Midnight Black"), so matching on the
+    listing title would silently split one model into several. A variant row is the single
+    canonical identity that each store's listing attaches to.
+
+    ``attributes`` is free-form on purpose: storage and colour suit phones, but capacity,
+    size, or pack count suit other things, and none of them should need a migration.
+    """
+
+    __tablename__ = "product_variants"
+    __table_args__ = (
+        UniqueConstraint("group_id", "label", name="uq_product_variants_group_label"),
+        Index("ix_product_variants_group_id", "group_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(
+        ForeignKey("product_groups.id", ondelete="CASCADE"), nullable=False
+    )
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    attributes: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    # Display order, so "128GB" sorts before "512GB" rather than alphabetically.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    group: Mapped[ProductGroup] = relationship(back_populates="variants")
+    products: Mapped[list[Product]] = relationship(back_populates="variant")
+
+
 class Product(Base):
     """A tracked product listing at one store.
 
@@ -108,6 +177,10 @@ class Product(Base):
     url_canonical: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     store_id: Mapped[int] = mapped_column(
         ForeignKey("stores.id", ondelete="RESTRICT"), nullable=False
+    )
+    # Nullable: a listing can be tracked on its own, before anyone groups it.
+    variant_id: Mapped[int | None] = mapped_column(
+        ForeignKey("product_variants.id", ondelete="SET NULL")
     )
 
     name: Mapped[str | None] = mapped_column(Text)
@@ -151,6 +224,7 @@ class Product(Base):
     )
 
     store: Mapped[Store] = relationship(back_populates="products", lazy="joined")
+    variant: Mapped[ProductVariant | None] = relationship(back_populates="products")
     price_history: Mapped[list[PriceHistory]] = relationship(
         back_populates="product", cascade="all, delete-orphan", passive_deletes=True
     )
