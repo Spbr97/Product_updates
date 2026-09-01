@@ -11,6 +11,7 @@ from functools import lru_cache
 
 from ..domain.errors import NoAdapterError
 from ..domain.models import StoreInfo
+from .amazon import AmazonAdapter
 from .base import StoreAdapter
 from .flipkart import FlipkartAdapter
 from .generic import GenericStoreAdapter
@@ -57,7 +58,7 @@ class StoreRegistry:
 
 def _build_default_adapters() -> list[StoreAdapter]:
     """Every adapter compiled into this build. Add new stores here."""
-    return [FlipkartAdapter(), GenericStoreAdapter()]
+    return [AmazonAdapter(), FlipkartAdapter(), GenericStoreAdapter()]
 
 
 @lru_cache(maxsize=1)

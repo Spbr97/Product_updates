@@ -114,3 +114,21 @@ class CellStatus(StrEnum):
     FAILED = "failed"  # Timeout, HTTP error, or a page we could not parse.
     NEVER_CHECKED = "never_checked"  # Tracked, but no successful check yet.
     NOT_TRACKED = "not_tracked"  # Nobody has added a URL for this variant at this store.
+
+
+class SearchOutcome(StrEnum):
+    """Why a store search returned what it did.
+
+    Separate from :class:`FetchOutcome` for the same reason availability is separate from
+    extraction success: "the shop has no such product" and "the shop would not talk to us"
+    are completely different answers, and a caller that cannot tell them apart will report
+    a product as unavailable at a retailer that simply blocked the search.
+    """
+
+    OK = "ok"
+    NO_RESULTS = "no_results"  # The search ran and the shop genuinely has nothing.
+    BLOCKED = "blocked"  # Refused. Says nothing about whether the shop stocks it.
+    PAGE_STRUCTURE = "page_structure"  # Answered, but not in a shape we could read.
+    TIMEOUT = "timeout"
+    ERROR = "error"
+    UNSUPPORTED = "unsupported"  # No search is configured for this store.

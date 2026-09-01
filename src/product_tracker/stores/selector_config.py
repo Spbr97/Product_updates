@@ -49,16 +49,16 @@ def load_selectors(slug: str) -> SelectorSet:
 
     known = {"name", "price", "out_of_stock", "image", "identifier_param"}
     return SelectorSet(
-        name=_as_tuple(raw.get("name")),
-        price=_as_tuple(raw.get("price")),
-        out_of_stock=_as_tuple(raw.get("out_of_stock")),
-        image=_as_tuple(raw.get("image")),
+        name=as_tuple(raw.get("name")),
+        price=as_tuple(raw.get("price")),
+        out_of_stock=as_tuple(raw.get("out_of_stock")),
+        image=as_tuple(raw.get("image")),
         identifier_param=raw.get("identifier_param"),
         extra={k: v for k, v in raw.items() if k not in known},
     )
 
 
-def _as_tuple(value: object) -> tuple[str, ...]:
+def as_tuple(value: object) -> tuple[str, ...]:
     """Accept a single selector or a list of them, so YAML can use either form."""
     if value is None:
         return ()
@@ -70,26 +70,35 @@ def _as_tuple(value: object) -> tuple[str, ...]:
 
 
 def select_text(soup: BeautifulSoup, selectors: tuple[str, ...]) -> str | None:
-    """First non-empty text (or ``content`` attribute) among the selectors."""
+    """First non-empty text (or ``content`` attribute) among the selectors.
+
+    Every element a selector matches is tried, not just the first. Retailers routinely put
+    an empty node ahead of the real one -- a screen-reader placeholder, a mobile variant
+    hidden by CSS -- and stopping at the first match reads that emptiness as "no match" and
+    moves on to a weaker selector.
+    """
     for selector in selectors:
-        tag = soup.select_one(selector)
-        if tag is None:
-            continue
-        content = tag.get("content")
-        text = str(content).strip() if content else tag.get_text(" ", strip=True)
-        if text:
-            return text
+        for tag in soup.select(selector):
+            content = tag.get("content")
+            text = str(content).strip() if content else tag.get_text(" ", strip=True)
+            if text:
+                return text
     return None
 
 
 def select_price(soup: BeautifulSoup, selectors: tuple[str, ...]) -> Decimal | None:
+    """First parseable price among the selectors.
+
+    As with :func:`select_text`, every match is tried. Amazon's core price block leads with
+    an empty ``.a-offscreen`` node and carries the real price in the next one, so taking
+    only the first match found nothing and fell through to a selector that matched a
+    "customers also bought" tile instead -- a confidently wrong price for another product.
+    """
     for selector in selectors:
-        tag = soup.select_one(selector)
-        if tag is None:
-            continue
-        price = parse_price(tag.get_text(" ", strip=True))
-        if price is not None:
-            return price
+        for tag in soup.select(selector):
+            price = parse_price(tag.get_text(" ", strip=True))
+            if price is not None:
+                return price
     return None
 
 

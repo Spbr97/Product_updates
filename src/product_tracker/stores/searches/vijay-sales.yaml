@@ -1,0 +1,23 @@
+# Vijay Sales search results.
+#
+# Verified 2026-09-01: /search?q= returns 200 and publishes some product links server-side,
+# but the results grid is largely client-rendered, so expect few hits. Recorded honestly
+# rather than dropped: a handful of real results is still better than none, and when the
+# page yields nothing the search reports PAGE_STRUCTURE rather than "no such product".
+
+url: "https://www.vijaysales.com/search?q={query}"
+
+product_url_pattern: "/p/[0-9]"
+
+result_link:
+  - "a[href*='/p/']"
+
+title:
+  - "h3"
+  - "div.product-title"
+
+price:
+  - "span.discounted-price"
+  - "div.price"
+
+result_container: "div"

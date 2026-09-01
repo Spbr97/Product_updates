@@ -18,6 +18,7 @@ from .enums import (
     FetchMethod,
     FetchOutcome,
     RuleType,
+    SearchOutcome,
     TrackingStatus,
 )
 
@@ -313,3 +314,57 @@ class ComparisonMatrix:
             if best is None or price < (best[0].best_price or price):
                 best = (row, row.best_store_slugs[0])
         return best
+
+
+@dataclass(frozen=True, slots=True)
+class SearchHit:
+    """One candidate listing found by searching a store.
+
+    A hit is a *suggestion*, never a decision. ``score`` says how well the title matches
+    what was asked for, and ``qualifiers`` names the model words present in the title but
+    absent from the query -- "FE", "Pro", "Plus". Those are what separate a Galaxy S25 from
+    a Galaxy S25 FE, two phones four hundred pounds apart that a naive match treats as the
+    same thing.
+    """
+
+    url: str
+    title: str
+    store_slug: str
+    price: Decimal | None = None
+    currency: str | None = None
+    image_url: str | None = None
+    score: float = 0.0
+    qualifiers: tuple[str, ...] = ()
+
+    @property
+    def is_exact(self) -> bool:
+        """Every word asked for is present, and no extra model qualifier is."""
+        return self.score >= 1.0 and not self.qualifiers
+
+
+@dataclass(frozen=True, slots=True)
+class SearchResult:
+    """What one store's search returned. Never raised, always reported."""
+
+    store_slug: str
+    outcome: SearchOutcome
+    hits: tuple[SearchHit, ...] = ()
+    message: str | None = None
+    http_status: int | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.outcome is SearchOutcome.OK
+
+    @classmethod
+    def failure(
+        cls,
+        store_slug: str,
+        outcome: SearchOutcome,
+        message: str,
+        *,
+        http_status: int | None = None,
+    ) -> SearchResult:
+        return cls(
+            store_slug=store_slug, outcome=outcome, message=message, http_status=http_status
+        )

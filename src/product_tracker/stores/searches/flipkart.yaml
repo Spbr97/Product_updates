@@ -1,0 +1,27 @@
+# Flipkart search results.
+#
+# Verified 2026-09-01: the results page is served over plain HTTP with product links in
+# the markup, unlike Flipkart product pages, which are largely client-rendered.
+
+url: "https://www.flipkart.com/search?q={query}"
+
+# Product URLs are /<slug>/p/itm<id>. Anchored on "/p/itm" so category, banner and
+# navigation links cannot be mistaken for products.
+product_url_pattern: "/p/itm"
+
+result_link:
+  - "a[href*='/p/itm']"
+
+# Flipkart puts the product name in the anchor's title attribute on grid results, and in
+# a child span on list results.
+title:
+  - "div.KzDlHZ"
+  - "a.wjcEIp"
+  - "div._4rR01T"
+  - "span.VU-ZEz"
+
+price:
+  - "div.Nx9bqj"
+  - "div._30jeq3"
+
+result_container: "div"

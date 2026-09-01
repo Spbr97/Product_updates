@@ -1,0 +1,46 @@
+# CSS selectors for Amazon India product pages.
+#
+# Selectors are listed most-specific first; the first one that matches wins.
+#
+# The single most important thing in this file is what is NOT here: a bare
+# `.a-price .a-offscreen`. It is the obvious selector, it matches on every Amazon page,
+# and on a real Galaxy S25 listing it returns Rs 61,480 -- the price of a "customers also
+# bought" tile, on a phone that costs Rs 84,999. Amazon puts fifteen of them on a page.
+#
+# So every price selector below is anchored to the buy-box container. If Amazon renames
+# those containers the price is simply not found, which is the correct failure: we report
+# that we could not read a price rather than reporting a confident wrong one.
+
+name:
+  - "#productTitle"
+  - "#title span"
+  - 'meta[name="title"]'
+
+price:
+  # The buy box, newest layout first. Anchored, never page-wide.
+  - "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen"
+  - "#corePrice_feature_div .a-price .a-offscreen"
+  - "#apex_desktop .a-price .a-offscreen"
+  - "#corePriceDisplay_mobile_feature_div .a-price .a-offscreen"
+  # Older single-node layouts.
+  - "#priceblock_ourprice"
+  - "#priceblock_dealprice"
+  - "#priceblock_saleprice"
+
+# Amazon states stock in words rather than by the presence of a marker element, so the
+# adapter reads this block's text instead of treating a match as a verdict.
+availability_text:
+  - "#availability"
+  - "#availabilityInsideBuyBox_feature_div"
+
+# Present only when Amazon has decided the item cannot be bought right now.
+out_of_stock:
+  - "#outOfStock"
+
+image:
+  - "#landingImage"
+  - "#imgBlkFront"
+  - 'meta[property="og:image"]'
+
+# The ASIN lives in the path (/dp/B0H3FN92VB), not in a query parameter.
+identifier_path_pattern: "/(?:dp|gp/product|product)/([A-Z0-9]{10})"

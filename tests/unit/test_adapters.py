@@ -84,8 +84,13 @@ class TestRegistryResolution:
         assert registry.resolve("https://www.flipkart.com/x/p/itm1").slug == "flipkart"
 
     def test_lists_every_store(self) -> None:
+        """Spelled out rather than derived, on purpose.
+
+        Registering an adapter changes which sites get store-specific handling, so it
+        should be a conscious edit here rather than something a test quietly absorbs.
+        """
         slugs = {info.slug for info in StoreRegistry().list_stores()}
-        assert slugs == {"flipkart", "generic"}
+        assert slugs == {"amazon-in", "flipkart", "generic"}
 
 
 class TestGenericAdapterSuccess:

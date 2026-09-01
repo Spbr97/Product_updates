@@ -1,0 +1,36 @@
+# Amazon India search results.
+#
+# Verified 2026-09-01: /s?k= is served over plain HTTP with the results in the markup.
+# The homepage answers with an AWS WAF challenge; search and product pages do not.
+
+url: "https://www.amazon.in/s?k={query}"
+
+# /dp/<ASIN>. Sponsored placements share the shape and are real results; /gp/slredirect/
+# click-trackers are not products and do not match.
+product_url_pattern: "/dp/[A-Z0-9]{10}"
+
+result_card: "div[data-component-type='s-search-result']"
+
+result_link:
+  - "a.a-link-normal[href*='/dp/']"
+
+# The card holds two h2s: a bare one carrying the brand ("Apple") and one inside the
+# product link carrying the actual title. Taking the first h2 returns the brand for every
+# result, which is why the linked one is listed first here.
+title:
+  - "a h2 span"
+  - "a h2"
+  - "h2 span.a-size-medium"
+
+# Amazon keeps the brand in its own h2, outside the product link. Without this a Xiaomi 17
+# is titled "17 (12GB/512GB)|50MP Leica..." and reads exactly like an iPhone 17.
+# Just the first h2: it is the brand when a card has one. A more specific
+# selector risks matching the title itself and prefixing a title with part of
+# itself.
+brand:
+  - "h2"
+
+# The first .a-offscreen in a card is the price being charged; the second is the struck-out
+# list price. Order matters -- reversed, every result reports its MRP.
+price:
+  - "span.a-price span.a-offscreen"

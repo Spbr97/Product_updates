@@ -70,17 +70,13 @@ KNOWN_STORES: tuple[StoreInfo, ...] = (
         adapter_key="generic",
     ),
     # Amazon *product* pages serve us; the homepage answers with an AWS WAF JavaScript
-    # challenge. The pages carry no JSON-LD and render their price with JavaScript, so
-    # checks land on PRICE_NOT_FOUND: we identify the listing and honestly report that we
-    # could not read a price. Listed anyway so those checks are attributed to Amazon
-    # instead of disappearing into "generic", and so the per-host circuit breaker treats
-    # Amazon's failures as Amazon's. Reading it properly needs an Amazon adapter; the
-    # WAF challenge is a security control and is not something to work around.
+    # challenge, which is a security control and is left alone. The pages carry no JSON-LD,
+    # so they need buy-box selectors of their own -- see stores/amazon.py.
     StoreInfo(
         slug="amazon-in",
         display_name="Amazon India",
         domains=("amazon.in",),
-        adapter_key="generic",
+        adapter_key="amazon-in",
     ),
     StoreInfo(
         slug=GENERIC_SLUG,
