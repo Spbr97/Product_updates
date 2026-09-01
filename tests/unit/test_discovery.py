@@ -200,10 +200,29 @@ class TestEscalation:
 
         return Settings(database_url="postgresql+psycopg://x/y")
 
+    @staticmethod
+    def instant_guard():  # type: ignore[no-untyped-def]
+        """A guard that paces nothing.
+
+        Discovery now builds a real throttle by default, which is right in production and
+        turns a millisecond test suite into a minute of real sleeping. StoreGuard takes an
+        injectable sleeper precisely so tests can be deterministic rather than slow.
+        """
+        from product_tracker.scheduler.throttle import StoreGuard
+
+        return StoreGuard(
+            min_interval_seconds=0.0,
+            jitter_seconds=0.0,
+            failure_threshold=99,
+            reset_seconds=0.0,
+            sleeper=lambda _seconds: None,
+        )
+
     def run(self, monkeypatch, searches, render_modes, **kwargs):  # type: ignore[no-untyped-def]
         from product_tracker.services.discovery import discover
 
         EscalationHarness(monkeypatch, searches, render_modes)
+        kwargs.setdefault("guard", self.instant_guard())
         return discover("Galaxy S25", self.settings(), **kwargs)
 
     def test_an_exact_match_on_the_cheap_pass_skips_rendering(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -271,7 +290,7 @@ class TestEscalation:
             for name in ("a", "b", "c")
         }
         harness = EscalationHarness(monkeypatch, searches, dict.fromkeys(searches, "auto"))
-        discover("Galaxy S25", self.settings())
+        discover("Galaxy S25", self.settings(), guard=self.instant_guard())
 
         assert harness.sessions == 1
 
@@ -290,3 +309,82 @@ class TestEscalation:
         # But every store still reports the reason, rather than a stale "unreadable".
         outcomes = {r.store_slug: r.outcome for r in found.unsearchable}
         assert set(outcomes.values()) == {SearchOutcome.NEEDS_BROWSER}
+
+
+class TestPacing:
+    """Search is not exempt from politeness because a person typed it."""
+
+    def test_a_guard_is_built_when_none_is_given(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """The gap that let this tool get a retailer to stop answering it.
+
+        ``discover`` took a guard, the CLI never passed one, and the HTTP pass was not
+        guarded at all -- so a fan-out hit every shop as fast as the network allowed, and
+        repeating that hard enough got one of them to block us.
+        """
+        from product_tracker.core.config import Settings
+        from product_tracker.services import discovery as module
+
+        built: list[object] = []
+        original = module._default_guard
+        monkeypatch.setattr(
+            module,
+            "_default_guard",
+            lambda settings: built.append(original(settings)) or built[-1],
+        )
+        searches = {"a": FakeSearch("a", ok("a", hit("a", "Galaxy S25", 1.0)), None)}
+        EscalationHarness(monkeypatch, searches, {})
+
+        module.discover("Galaxy S25", Settings(database_url="postgresql+psycopg://x/y"))
+
+        assert built, "discover must pace itself even when the caller forgets to ask"
+
+    def test_every_pass_goes_through_the_guard(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """Including the cheap HTTP one, which was previously unthrottled."""
+        from product_tracker.core.config import Settings
+        from product_tracker.services import discovery as module
+
+        seen: list[str] = []
+
+        class RecordingGuard:
+            def before(self, host: str):  # type: ignore[no-untyped-def]
+                from product_tracker.domain.models import GuardDecision
+
+                seen.append(host)
+                return GuardDecision.go()
+
+            def after(self, host: str, *, succeeded: bool) -> None: ...
+
+        searches = {
+            "a": FakeSearch("a", ok("a", hit("a", "Galaxy S25", 1.0)), None),
+            "b": FakeSearch("b", ok("b", hit("b", "Galaxy S25", 1.0)), None),
+        }
+        EscalationHarness(monkeypatch, searches, {})
+        module.discover(
+            "Galaxy S25",
+            Settings(database_url="postgresql+psycopg://x/y"),
+            guard=RecordingGuard(),
+        )
+
+        assert len(seen) == 2
+
+    def test_a_throttled_store_is_reported_not_silently_skipped(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        from product_tracker.core.config import Settings
+        from product_tracker.domain.models import GuardDecision
+        from product_tracker.services import discovery as module
+
+        class RefusingGuard:
+            def before(self, host: str) -> GuardDecision:
+                return GuardDecision.skip("circuit open")
+
+            def after(self, host: str, *, succeeded: bool) -> None: ...
+
+        searches = {"a": FakeSearch("a", ok("a", hit("a", "Galaxy S25", 1.0)), None)}
+        EscalationHarness(monkeypatch, searches, {})
+        found = module.discover(
+            "Galaxy S25",
+            Settings(database_url="postgresql+psycopg://x/y"),
+            guard=RefusingGuard(),
+        )
+
+        assert not searches["a"].calls
+        assert [r.store_slug for r in found.unsearchable] == ["a"]

@@ -13,12 +13,15 @@ candidates come back with their score and their qualifiers, and a person -- or a
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 
 from ..core.config import Settings
 from ..core.logging import get_logger
 from ..domain.enums import SearchOutcome
 from ..domain.models import CheckGuard, FetchContext, SearchHit, SearchResult
+from ..scheduler.throttle import StoreGuard
 from ..stores import browser
 from ..stores.catalogue import KNOWN_STORES
 from ..stores.search import (
@@ -122,6 +125,11 @@ def discover(
     themselves to.
     """
     targets = store_slugs if store_slugs is not None else searchable_stores()
+    # Paced by default, not only when a caller remembers to ask. Search fans out across
+    # every shop and can run several passes, and an unthrottled fan-out is how this tool
+    # got one retailer to stop answering it altogether: the guard existed, `discover` took
+    # one, and nothing ever passed it in.
+    guard = guard or _default_guard(settings)
     ctx = FetchContext(
         timeout_seconds=settings.http_timeout_seconds,
         # Each pass decides for itself; the adapters never escalate on their own here.
@@ -129,7 +137,12 @@ def discover(
         user_agent=settings.http_user_agent,
     )
 
-    results = {slug: _search_one(slug, query, ctx, limit_per_store) for slug in targets}
+    results = {
+        slug: _guarded(
+            slug, guard, partial(_search_one, slug, query, ctx, limit_per_store)
+        )
+        for slug in targets
+    }
     discovery = Discovery(query=query, results=tuple(results.values()))
 
     if allow_browser and not discovery.exact:
@@ -151,7 +164,7 @@ def discover(
     # publishes for crawlers, cached for a day, and never their search.
     catalogues = _worth_cataloguing(results)
     if catalogues:
-        results.update(_sitemap_pass(catalogues, query, ctx, limit_per_store))
+        results.update(_sitemap_pass(catalogues, query, ctx, limit_per_store, guard))
         discovery = Discovery(query=query, results=tuple(results.values()))
 
     log.info(
@@ -162,6 +175,37 @@ def discover(
         exact=len(discovery.exact),
     )
     return discovery
+
+
+def _default_guard(settings: Settings) -> CheckGuard:
+    """The same per-host pacing and circuit breaking a scheduled check gets.
+
+    Search is not exempt from politeness merely because a person typed it.
+    """
+    return StoreGuard(
+        min_interval_seconds=settings.store_min_interval_seconds,
+        jitter_seconds=settings.fetch_jitter_seconds,
+        failure_threshold=settings.store_failure_threshold,
+        reset_seconds=settings.store_circuit_reset_seconds,
+    )
+
+
+def _guarded(
+    slug: str, guard: CheckGuard | None, call: Callable[[], SearchResult]
+) -> SearchResult:
+    """Run one store's lookup behind the throttle, recording how it went."""
+    if guard is None:
+        return call()
+
+    host = _host_for(slug)
+    decision = guard.before(host)
+    if not decision.proceed:
+        return SearchResult.failure(
+            slug, SearchOutcome.ERROR, decision.reason or "throttled"
+        )
+    result = call()
+    guard.after(host, succeeded=result.succeeded)
+    return result
 
 
 def _search_one(
@@ -217,13 +261,19 @@ def _worth_cataloguing(results: dict[str, SearchResult]) -> tuple[str, ...]:
 
 
 def _sitemap_pass(
-    slugs: tuple[str, ...], query: str, ctx: FetchContext, limit: int
+    slugs: tuple[str, ...],
+    query: str,
+    ctx: FetchContext,
+    limit: int,
+    guard: CheckGuard | None = None,
 ) -> dict[str, SearchResult]:
     """Look each store up in its own published catalogue."""
     log.info("discovery.sitemap_pass", stores=len(slugs))
     found: dict[str, SearchResult] = {}
     for slug in slugs:
-        result = SitemapSearch(slug).search(query, ctx, limit=limit)
+        result = _guarded(
+            slug, guard, partial(SitemapSearch(slug).search, query, ctx, limit=limit)
+        )
         # Only replace the earlier answer when this one is better. A store that asked us
         # not to crawl its search should keep saying so if its catalogue helps no more.
         if result.succeeded:
@@ -256,18 +306,12 @@ def _render_pass(
 
     with browser.session(headless=settings.playwright_headless):
         for slug in slugs:
-            if guard is not None:
-                decision = guard.before(_host_for(slug))
-                if not decision.proceed:
-                    rendered[slug] = SearchResult.failure(
-                        slug, SearchOutcome.ERROR, decision.reason or "throttled"
-                    )
-                    continue
-
-            result = _search_one(slug, query, ctx, limit, use_browser=True)
+            result = _guarded(
+                slug,
+                guard,
+                partial(_search_one, slug, query, ctx, limit, use_browser=True),
+            )
             rendered[slug] = result
-            if guard is not None:
-                guard.after(_host_for(slug), succeeded=result.succeeded)
 
             # One missing browser means every remaining store would say the same thing.
             if result.outcome is SearchOutcome.NEEDS_BROWSER:
