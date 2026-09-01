@@ -9,9 +9,11 @@ database writes are applied afterwards in one short transaction. Holding a Postg
 transaction open across a 25-second HTTP request would pin a connection and block
 autovacuum for no benefit.
 
-Phase 2 scope: fetch, update the product, write a ``check_executions`` row. Price and
-availability history arrive in phase 3, rule evaluation and notifications in phase 4, and
-retries and throttling in phase 5.
+History is appended in the same transaction as the execution row, and every history row
+carries the ``check_execution_id`` that produced it, so any recorded price can be traced
+back to the fetch that saw it.
+
+Rule evaluation and notifications arrive in phase 4; retries and throttling in phase 5.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from ..core.config import Settings
 from ..core.logging import (
+    EVENT_CHANGE_DETECTED,
     EVENT_CHECK_FINISHED,
     EVENT_CHECK_STARTED,
     bind_context,
@@ -33,10 +36,13 @@ from ..db.models import CheckExecution, Product
 from ..domain.enums import CheckStatus, FetchMethod, FetchOutcome
 from ..domain.errors import NotFoundError
 from ..domain.models import FetchContext, FetchResult
+from ..repositories.availability_history import AvailabilityHistoryRepository
 from ..repositories.executions import truncate_error
+from ..repositories.price_history import PriceHistoryRepository
 from ..repositories.products import ProductRepository
 from ..stores.registry import StoreRegistry
 from ..utils.urls import host_of, validate_url
+from .change_detection import detect_availability_change, detect_price_change
 
 log = get_logger(__name__)
 
@@ -137,9 +143,24 @@ class TrackingEngine:
         started_at: datetime,
         duration_ms: int,
     ) -> CheckExecution:
-        """Apply the result to the product and write the execution row."""
+        """Apply the result to the product, append history, and write the execution row."""
         finished = datetime.now(UTC)
         status = _status_for(result)
+
+        prices = PriceHistoryRepository(session)
+        availabilities = AvailabilityHistoryRepository(session)
+
+        last_price = prices.latest(product.id)
+        last_availability = availabilities.latest(product.id)
+
+        price_outcome = detect_price_change(
+            result,
+            last_price.price if last_price else None,
+            last_price.currency if last_price else None,
+        )
+        availability_outcome = detect_availability_change(
+            result, last_availability.availability if last_availability else None
+        )
 
         execution = CheckExecution(
             product_id=product.id,
@@ -153,11 +174,46 @@ class TrackingEngine:
             extracted_price=result.price,
             extracted_currency=result.currency,
             availability_result=result.availability,
+            price_changed=price_outcome.changed,
+            availability_changed=availability_outcome.changed,
             attempts=1,
             error_type=None if status is CheckStatus.SUCCESS else result.outcome.value,
             error_detail=None if status is CheckStatus.SUCCESS else truncate_error(result.message),
         )
         session.add(execution)
+        # Flush now so history rows can carry this execution's id as their provenance.
+        session.flush()
+
+        if price_outcome.should_record and result.price is not None:
+            prices.record(
+                product_id=product.id,
+                price=result.price,
+                currency=result.currency or product.currency or "",
+                observed_at=finished,
+                check_execution_id=execution.id,
+            )
+        if availability_outcome.should_record:
+            availabilities.record(
+                product_id=product.id,
+                availability=result.availability,
+                observed_at=finished,
+                check_execution_id=execution.id,
+            )
+
+        if price_outcome.changed or availability_outcome.changed:
+            log.info(
+                EVENT_CHANGE_DETECTED,
+                price_changed=price_outcome.changed,
+                availability_changed=availability_outcome.changed,
+                previous_price=str(price_outcome.previous)
+                if price_outcome.previous is not None
+                else None,
+                price=str(price_outcome.current) if price_outcome.current is not None else None,
+                previous_availability=availability_outcome.previous.value
+                if availability_outcome.previous
+                else None,
+                availability=availability_outcome.current.value,
+            )
 
         product.last_checked_at = finished
         if result.succeeded:

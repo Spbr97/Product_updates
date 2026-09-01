@@ -7,9 +7,9 @@ rules, and notifies you through configured providers — on a schedule, in the b
 Built to be extended: adding a store, a notification channel, or an alert condition means
 adding a module, not editing the tracking engine.
 
-> **Status: phases 1–2 of 7 complete.** You can add products by URL, check them, and
-> see price and availability. History, alerts, and scheduling are next — see
-> [Roadmap](#roadmap).
+> **Status: phases 1–3 of 7 complete.** You can add products by URL, check them, and
+> read full price/availability history with statistics. Alerts and scheduling are next
+> — see [Roadmap](#roadmap).
 
 ---
 
@@ -20,9 +20,12 @@ adding a module, not editing the tracking engine.
 - **Price and availability, separately.** A failure to read a price is recorded as
   "unknown", never as "out of stock". Extraction failures and stock states are different
   facts and are stored as such.
-- **Full history.** Every meaningful price observation is appended, never overwritten. The
-  schema answers current/lowest/highest/average price, change over time, and when the low
-  occurred.
+- **Full history.** Every meaningful price observation is appended, never overwritten.
+  "Meaningful" means the first observation, a changed price, or a currency switch —
+  repeating an unchanged number would grow the series without adding information. Every
+  check is still recorded in `check_executions` either way. Availability is stored as one
+  row per *transition*. Answers current/lowest/highest/average, when the low occurred, and
+  change over time.
 - **Configurable alerts.** Rules ("price dropped", "below ₹69,999", "back in stock") are
   data, not code branches. Notifications are deduplicated so a retried job cannot alert you
   twice.
@@ -186,8 +189,12 @@ uvicorn product_tracker.api.app:get_app --factory --reload
 - `/api/v1/products/{id}` — `GET` one, `DELETE` to stop tracking.
 - `/api/v1/products/{id}/check` — `POST` to check now. Returns **200 with a failed
   execution** when a store cannot be read: that is a recorded fact, not a broken API.
+- `/api/v1/products/{id}/history` — recorded prices, newest first, paginated.
+- `/api/v1/products/{id}/availability` — availability transitions.
+- `/api/v1/products/{id}/stats` — current/lowest/highest/average, when the low occurred,
+  and change since the first observation. `null` when nothing has been recorded yet.
 - `/api/v1/stores` — supported stores, from the adapter registry.
-- History and alert routes arrive in phases 3–4.
+- Alert routes arrive in phase 4.
 
 Every error response uses one envelope:
 
@@ -214,10 +221,10 @@ product-tracker list [--store flipkart] [--status active] [--limit 20]
 product-tracker show <ID>
 product-tracker check <ID>
 product-tracker remove <ID> [--yes]
+product-tracker history <ID> [--stats] [--availability] [--limit 20]
 ```
 
-Commands arriving in later phases: `history`, `pause`, `resume`,
-`alerts add|list|remove`, `worker`.
+Commands arriving in later phases: `pause`, `resume`, `alerts add|list|remove`, `worker`.
 
 ## 10. Running the scheduler/workers
 
@@ -308,6 +315,8 @@ docker build -f docker/Dockerfile `
 | `status` says "no stores registered" | Run `product-tracker stores sync`. |
 | Integration tests all skip | `TEST_DATABASE_URL` is unset. That is intentional, not a failure. |
 | Readiness hangs | Should not happen: `DB_CONNECT_TIMEOUT_SECONDS` (default 5) bounds connection attempts. |
+| History has fewer rows than checks | Expected. Only changed prices are appended; every check is in `check_executions`. |
+| Stats say `mixed_currency` | The listing has been priced in more than one currency. Statistics cover the most recent one; averaging across currencies would be meaningless. |
 | A store reports `blocked` | The site served an anti-bot challenge. This is recorded, not worked around. Try a direct product URL, or accept that the store is unreadable. |
 | `Playwright is not installed` | `pip install -e ".[browser]"` then `playwright install chromium`, or set `PLAYWRIGHT_ENABLED=false`. |
 | `Docker Desktop is unable to start` (Windows) | Windows Home can only use the WSL2 backend. In an **Administrator** shell: `wsl --install`, then reboot. |
@@ -320,8 +329,8 @@ docker build -f docker/Dockerfile `
 |---|---|---|
 | 1 | Foundation: config, database, models, migrations, logging, CLI, API skeleton | **done** |
 | 2 | Store adapter interface, generic + Flipkart adapters, URL validation, manual check | **done** |
-| 3 | Price/availability history, statistics, change detection | next |
-| 4 | Tracking rules, notification abstraction, providers, deduplication | |
+| 3 | Price/availability history, statistics, change detection | **done** |
+| 4 | Tracking rules, notification abstraction, providers, deduplication | next |
 | 5 | Scheduler, background worker, retries, rate limiting | |
 | 6 | Complete API and CLI surface, auth, pagination | |
 | 7 | Test coverage, Docker polish, docs, security and performance review | |

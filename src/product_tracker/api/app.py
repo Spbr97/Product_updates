@@ -36,12 +36,13 @@ records history, evaluates alert rules, and notifies through configured provider
 def build_v1_router() -> APIRouter:
     """Assemble the versioned router.
 
-    History and alert routes are mounted here as later phases land.
+    Alert routes are mounted here as later phases land.
     """
-    from .routers import products, stores
+    from .routers import history, products, stores
 
     router = APIRouter(prefix=API_V1_PREFIX)
     router.include_router(products.router)
+    router.include_router(history.router)
     router.include_router(stores.router)
     return router
 

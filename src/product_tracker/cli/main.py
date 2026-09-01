@@ -15,7 +15,7 @@ from .. import __version__
 from ..core.config import get_settings
 from ..core.logging import configure_logging
 from ..domain.errors import ConfigurationError
-from . import products, system
+from . import history, products, system
 from .formatting import ExitCode, error, stdout
 
 app = typer.Typer(
@@ -34,6 +34,7 @@ app.command("list")(products.list_products)
 app.command("show")(products.show)
 app.command("remove")(products.remove)
 app.command("check")(products.check)
+app.command("history")(history.history)
 
 
 def _version_callback(value: bool) -> None:
