@@ -47,7 +47,12 @@ where = ["src"]
 product_tracker = ["stores/selectors/*.yaml"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# "." as well as "src": test modules share helpers via `from tests.unit... import`,
+# which needs the project root importable. `python -m pytest` adds the working
+# directory for free, but the bare `pytest` console script does not -- so without
+# this the suite only ran one specific way, and CI (which runs `pytest`) collected
+# 15 errors.
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 markers = [
   "db: test requires a live PostgreSQL database (TEST_DATABASE_URL)",
