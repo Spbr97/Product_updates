@@ -92,7 +92,12 @@ class Settings(BaseSettings):
 
     # --- API --------------------------------------------------------------------
     api_key: SecretStr | None = Field(
-        default=None, description="If set, required as X-API-Key on mutating endpoints."
+        default=None,
+        description=(
+            "If set, required as X-API-Key on mutating endpoints. Accepts a "
+            "comma-separated list so a key can be rotated without downtime; keys "
+            "themselves must not contain commas."
+        ),
     )
     api_allow_anonymous_reads: bool = True
     api_max_page_size: int = Field(default=100, ge=1, le=1000)

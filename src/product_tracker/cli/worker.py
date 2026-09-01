@@ -11,11 +11,12 @@ from ..core.config import get_settings
 from ..db.session import session_scope
 from ..domain.enums import CheckStatus
 from ..repositories.products import ProductRepository
+from ..scheduler.lock import WorkerAlreadyRunningError
 from ..scheduler.runner import WorkerRunner, desired_schedule
 from ..services.check_runner import deliver_pending, run_check
 from ..stores.registry import default_registry
 from ..utils.money import format_money
-from .formatting import ExitCode, info, stdout, success, table, warn
+from .formatting import ExitCode, error, info, stdout, success, table, warn
 
 
 def worker(
@@ -26,9 +27,9 @@ def worker(
 ) -> None:
     """Run the background worker: recurring checks on each product's interval.
 
-    Runs until interrupted. Only one worker should run against a database at a time --
-    APScheduler's job store has no cross-process locking, so two workers would each run
-    every job.
+    Runs until interrupted. Only one worker may run against a database at a time: an
+    advisory lock makes a second one refuse to start, because two workers would each run
+    every job and check every product twice.
     """
     settings = get_settings()
 
@@ -46,7 +47,11 @@ def worker(
         raise typer.Exit(ExitCode.OK)
 
     info("Starting worker. Press Ctrl+C to stop.")
-    WorkerRunner(settings).run()
+    try:
+        WorkerRunner(settings).run()
+    except WorkerAlreadyRunningError as exc:
+        error(str(exc))
+        raise typer.Exit(ExitCode.ERROR) from exc
     success("worker stopped")
 
 

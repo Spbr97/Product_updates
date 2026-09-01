@@ -7,6 +7,9 @@ anything else.
 
 Deliberately a separate process from the API. A check can take half a minute and the API
 should stay responsive; and either can be restarted without the other.
+
+Exactly one worker may run per database, enforced by an advisory lock rather than left to
+documentation -- see ``lock.py``.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from ..workers import check_worker
 from . import heartbeat
 from .apscheduler_queue import APSchedulerJobQueue
 from .jobqueue import JobQueue, ReconcileReport
+from .lock import WorkerLock
 from .throttle import StoreGuard
 
 log = get_logger(__name__)
@@ -109,6 +113,7 @@ class WorkerRunner:
             self.settings.database_url, check_callable=check_worker.run_check
         )
         self._stopped = threading.Event()
+        self.lock = WorkerLock()
 
     def setup(self) -> ReconcileReport:
         """Install the housekeeping jobs and bring the schedule up to date.
@@ -138,7 +143,16 @@ class WorkerRunner:
         return reconcile_now(self.queue, self.settings, worker_id=self.worker_id)
 
     def run(self) -> None:
-        """Start the scheduler and block until stopped. Handles SIGINT and SIGTERM."""
+        """Start the scheduler and block until stopped. Handles SIGINT and SIGTERM.
+
+        Takes an advisory lock first: a second worker against the same database would run
+        every job a second time, and refusing loudly is better than doubling silently.
+        Raises ``WorkerAlreadyRunningError`` if another worker holds it.
+        """
+        with self.lock:
+            self._run_locked()
+
+    def _run_locked(self) -> None:
         report = self.setup()
         log.info(
             "worker.starting",

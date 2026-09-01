@@ -8,6 +8,7 @@ from product_tracker.core.config import Settings
 from product_tracker.core.security import (
     is_auth_enabled,
     requires_key_for_reads,
+    valid_keys,
     verify_api_key,
 )
 
@@ -86,3 +87,42 @@ class TestBlankSecrets:
 
     def test_a_real_key_still_works(self) -> None:
         assert is_auth_enabled(settings(api_key=KEY))
+
+
+class TestKeyRotation:
+    """More than one key may be valid at a time.
+
+    With a single key, rotation means a window in which every client is broken -- which in
+    practice means the key never gets rotated.
+    """
+
+    def test_both_keys_work_during_a_rotation(self) -> None:
+        instance = settings(api_key="old-key,new-key")
+
+        assert verify_api_key(instance, "old-key")
+        assert verify_api_key(instance, "new-key")
+
+    def test_a_retired_key_stops_working(self) -> None:
+        assert not verify_api_key(settings(api_key="new-key"), "old-key")
+
+    def test_whitespace_around_keys_is_ignored(self) -> None:
+        instance = settings(api_key=" old-key , new-key ")
+
+        assert verify_api_key(instance, "old-key")
+        assert verify_api_key(instance, "new-key")
+
+    def test_an_unrelated_key_still_fails(self) -> None:
+        assert not verify_api_key(settings(api_key="a,b,c"), "d")
+
+    def test_valid_keys_are_listed(self) -> None:
+        assert valid_keys(settings(api_key="a,b")) == ("a", "b")
+
+    def test_no_keys_when_unset(self) -> None:
+        assert valid_keys(settings()) == ()
+
+    def test_a_list_of_blanks_disables_auth(self) -> None:
+        """`API_KEY=,,` is as empty as `API_KEY=`."""
+        instance = settings(api_key=" , , ")
+
+        assert not is_auth_enabled(instance)
+        assert verify_api_key(instance, None)
