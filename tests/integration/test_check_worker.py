@@ -306,11 +306,12 @@ class TestDeliveryIsOutsideTheCheckTransaction:
         from product_tracker.repositories.notifications import NotificationRepository
         from product_tracker.services.alert_service import AlertService
         from product_tracker.services.tracking import TrackingEngine
+        from product_tracker.services.user_service import default_user
 
         respx.get(URL).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))
         product_id = add_committed()
         with session_scope() as session:
-            AlertService(session).add(
+            AlertService(session, default_user(session).id).add(
                 product_id,
                 __import__(
                     "product_tracker.domain.enums", fromlist=["RuleType"]
@@ -338,11 +339,12 @@ class TestDeliveryIsOutsideTheCheckTransaction:
         from product_tracker.repositories.notifications import NotificationRepository
         from product_tracker.services.alert_service import AlertService
         from product_tracker.services.check_runner import run_check
+        from product_tracker.services.user_service import default_user
 
         respx.get(URL).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))
         product_id = add_committed()
         with session_scope() as session:
-            AlertService(session).add(
+            AlertService(session, default_user(session).id).add(
                 product_id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "99999"}
             )
 
@@ -368,11 +370,12 @@ class TestDeliveryIsOutsideTheCheckTransaction:
         from product_tracker.domain.enums import RuleType
         from product_tracker.services.alert_service import AlertService
         from product_tracker.services.check_runner import run_check
+        from product_tracker.services.user_service import default_user
 
         respx.get(URL).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))
         product_id = add_committed()
         with session_scope() as session:
-            AlertService(session).add(
+            AlertService(session, default_user(session).id).add(
                 product_id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "99999"}
             )
 
@@ -393,11 +396,12 @@ class TestDeliveryIsOutsideTheCheckTransaction:
         from product_tracker.domain.enums import RuleType
         from product_tracker.services.alert_service import AlertService
         from product_tracker.services.check_runner import deliver_pending, run_check
+        from product_tracker.services.user_service import default_user
 
         respx.get(URL).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))
         product_id = add_committed()
         with session_scope() as session:
-            AlertService(session).add(
+            AlertService(session, default_user(session).id).add(
                 product_id, RuleType.PRICE_BELOW_TARGET, params={"target_price": "99999"}
             )
 

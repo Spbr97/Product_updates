@@ -16,7 +16,7 @@ from ...domain.enums import TrackingStatus
 from ...services.check_runner import run_check
 from ...services.product_service import ProductService
 from ...stores.registry import default_registry
-from ..deps import Config, DbSession, PageParams, RequireWrite
+from ..deps import Config, CurrentReader, CurrentUser, DbSession, PageParams, RequireWrite
 from ..schemas.common import ErrorResponse, Page
 from ..schemas.products import CheckResponse, ProductCreate, ProductResponse
 
@@ -35,9 +35,9 @@ router = APIRouter(prefix="/products", tags=["products"])
     },
 )
 def create_product(
-    payload: ProductCreate, session: DbSession, settings: Config
+    payload: ProductCreate, session: DbSession, settings: Config, user: CurrentUser
 ) -> ProductResponse:
-    service = ProductService(session, default_registry(), settings)
+    service = ProductService(session, default_registry(), settings, user.id)
     product = service.add(payload.url, check_interval_seconds=payload.check_interval_seconds)
     session.flush()
     return ProductResponse.model_validate(product)
@@ -47,13 +47,14 @@ def create_product(
 def list_products(
     session: DbSession,
     settings: Config,
+    user: CurrentReader,
     page: PageParams,
     store: Annotated[str | None, Query(description="Filter by store slug.")] = None,
     tracking_status: Annotated[
         TrackingStatus | None, Query(description="Filter by tracking status.")
     ] = None,
 ) -> Page[ProductResponse]:
-    service = ProductService(session, default_registry(), settings)
+    service = ProductService(session, default_registry(), settings, user.id)
     result = service.list(
         limit=page.limit, offset=page.offset, store_slug=store, tracking_status=tracking_status
     )
@@ -71,8 +72,10 @@ def list_products(
     summary="Get one product",
     responses={404: {"model": ErrorResponse, "description": "No such product."}},
 )
-def get_product(product_id: int, session: DbSession, settings: Config) -> ProductResponse:
-    service = ProductService(session, default_registry(), settings)
+def get_product(
+    product_id: int, session: DbSession, settings: Config, user: CurrentReader
+) -> ProductResponse:
+    service = ProductService(session, default_registry(), settings, user.id)
     return ProductResponse.model_validate(service.get(product_id))
 
 
@@ -83,9 +86,11 @@ def get_product(product_id: int, session: DbSession, settings: Config) -> Produc
     dependencies=[RequireWrite],
     responses={404: {"model": ErrorResponse, "description": "No such product."}},
 )
-def delete_product(product_id: int, session: DbSession, settings: Config) -> None:
+def delete_product(
+    product_id: int, session: DbSession, settings: Config, user: CurrentUser
+) -> None:
     """Delete the product. Its history, rules, and executions cascade with it."""
-    ProductService(session, default_registry(), settings).remove(product_id)
+    ProductService(session, default_registry(), settings, user.id).remove(product_id)
 
 
 @router.post(

@@ -16,7 +16,7 @@ from ...domain.errors import NotFoundError
 from ...repositories.groups import GroupRepository
 from ...services import group_service
 from ...services.comparison import DEFAULT_STALE_AFTER, GroupNotFoundError, build_matrix
-from ..deps import DbSession, RequireWrite
+from ..deps import CurrentReader, CurrentUser, DbSession, RequireWrite
 from ..schemas.common import ErrorResponse
 from ..schemas.groups import (
     ComparisonCellResponse,
@@ -39,8 +39,9 @@ _DEFAULT_STALE_HOURS = int(DEFAULT_STALE_AFTER.total_seconds() // 3600)
 
 
 @router.get("", response_model=list[GroupResponse], summary="List product groups")
-def list_groups(session: DbSession) -> list[GroupResponse]:
-    return [GroupResponse.model_validate(group) for group in GroupRepository(session).list_all()]
+def list_groups(session: DbSession, user: CurrentReader) -> list[GroupResponse]:
+    groups = GroupRepository(session).list_all(user.id)
+    return [GroupResponse.model_validate(group) for group in groups]
 
 
 @router.post(
@@ -54,9 +55,16 @@ def list_groups(session: DbSession) -> list[GroupResponse]:
         422: {"model": ErrorResponse, "description": "Invalid name or slug."},
     },
 )
-def create_group(payload: GroupCreate, session: DbSession) -> GroupResponse:
+def create_group(
+    payload: GroupCreate, session: DbSession, user: CurrentUser
+) -> GroupResponse:
     group = group_service.create_group(
-        session, slug=payload.slug, name=payload.name, brand=payload.brand, notes=payload.notes
+        session,
+        user_id=user.id,
+        slug=payload.slug,
+        name=payload.name,
+        brand=payload.brand,
+        notes=payload.notes,
     )
     session.flush()
     return GroupResponse.model_validate(group)
@@ -68,8 +76,8 @@ def create_group(payload: GroupCreate, session: DbSession) -> GroupResponse:
     summary="Show one product group",
     responses=_NOT_FOUND,
 )
-def get_group(slug: str, session: DbSession) -> GroupResponse:
-    return GroupResponse.model_validate(group_service.get_group(session, slug))
+def get_group(slug: str, session: DbSession, user: CurrentReader) -> GroupResponse:
+    return GroupResponse.model_validate(group_service.get_group(session, user.id, slug))
 
 
 @router.delete(
@@ -79,9 +87,9 @@ def get_group(slug: str, session: DbSession) -> GroupResponse:
     dependencies=[RequireWrite],
     responses=_NOT_FOUND,
 )
-def delete_group(slug: str, session: DbSession) -> None:
+def delete_group(slug: str, session: DbSession, user: CurrentUser) -> None:
     """Remove a group. Tracked listings and their price history are kept."""
-    group_service.delete_group(session, slug)
+    group_service.delete_group(session, user.id, slug)
 
 
 @router.post(
@@ -98,10 +106,13 @@ def delete_group(slug: str, session: DbSession) -> None:
         },
     },
 )
-def attach_listing(slug: str, payload: VariantAttach, session: DbSession) -> VariantSummary:
+def attach_listing(
+    slug: str, payload: VariantAttach, session: DbSession, user: CurrentUser
+) -> VariantSummary:
     _product, variant = group_service.attach_product(
         session,
         payload.product_id,
+        user_id=user.id,
         group_slug=slug,
         label=payload.variant,
         attributes=payload.attributes,
@@ -117,10 +128,13 @@ def attach_listing(slug: str, payload: VariantAttach, session: DbSession) -> Var
     dependencies=[RequireWrite],
     responses=_NOT_FOUND,
 )
-def detach_listing(slug: str, product_id: int, session: DbSession) -> None:
+def detach_listing(
+    slug: str, product_id: int, session: DbSession, user: CurrentUser
+) -> None:
     """The listing keeps tracking and keeps its history; it only loses the grouping."""
-    group_service.get_group(session, slug)  # 404 for an unknown group, not a silent no-op.
-    group_service.detach_product(session, product_id)
+    # 404 for a group this user does not own, rather than a silent no-op.
+    group_service.get_group(session, user.id, slug)
+    group_service.detach_product(session, product_id, user.id)
 
 
 @router.get(
@@ -132,12 +146,15 @@ def detach_listing(slug: str, product_id: int, session: DbSession) -> None:
 def compare(
     slug: str,
     session: DbSession,
+    user: CurrentReader,
     stale_hours: Annotated[
         int, Query(ge=1, le=8760, description="Flag prices older than this.")
     ] = _DEFAULT_STALE_HOURS,
 ) -> ComparisonResponse:
     try:
-        matrix = build_matrix(session, slug, stale_after=timedelta(hours=stale_hours))
+        matrix = build_matrix(
+            session, slug, user_id=user.id, stale_after=timedelta(hours=stale_hours)
+        )
     except GroupNotFoundError as exc:
         # Translated so the API answers with the project's standard 404 envelope.
         raise NotFoundError("product group", slug) from exc

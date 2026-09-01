@@ -17,10 +17,13 @@ from ..services.product_service import ProductService
 from ..stores.registry import default_registry
 from ..utils.money import format_money
 from .formatting import ExitCode, error, info, stdout, success, table, warn
+from .users import UserOption, acting_user
 
 
-def _service(session) -> ProductService:  # type: ignore[no-untyped-def]
-    return ProductService(session, default_registry(), get_settings())
+def _service(session, user: str | None = None) -> ProductService:  # type: ignore[no-untyped-def]
+    return ProductService(
+        session, default_registry(), get_settings(), acting_user(session, user).id
+    )
 
 
 def add(
@@ -32,11 +35,12 @@ def add(
     check_now: Annotated[
         bool, typer.Option("--check/--no-check", help="Run a check immediately after adding.")
     ] = True,
+    user: UserOption = None,
 ) -> None:
     """Track a new product by URL."""
     try:
         with session_scope() as session:
-            product = _service(session).add(url, check_interval_seconds=interval)
+            product = _service(session, user).add(url, check_interval_seconds=interval)
             product_id = product.id
             store_name = product.store.name
     except ValidationError as exc:
@@ -62,10 +66,11 @@ def list_products(
     ] = None,
     limit: Annotated[int, typer.Option("--limit", min=1, max=500)] = 20,
     offset: Annotated[int, typer.Option("--offset", min=0)] = 0,
+    user: UserOption = None,
 ) -> None:
     """List tracked products."""
     with session_scope() as session:
-        page = _service(session).list(
+        page = _service(session, user).list(
             limit=limit, offset=offset, store_slug=store, tracking_status=status
         )
         rows = [
@@ -94,11 +99,14 @@ def list_products(
     stdout.print(listing)
 
 
-def show(product_id: Annotated[int, typer.Argument(help="Product ID.")]) -> None:
+def show(
+    product_id: Annotated[int, typer.Argument(help="Product ID.")],
+    user: UserOption = None,
+) -> None:
     """Show one product in detail, with its most recent checks."""
     try:
         with session_scope() as session:
-            product = _service(session).get(product_id)
+            product = _service(session, user).get(product_id)
             detail = table(f"Product {product.id}", ["Field", "Value"])
             detail.add_row("name", product.name or "-")
             detail.add_row("store", product.store.name)
@@ -144,11 +152,12 @@ def show(product_id: Annotated[int, typer.Argument(help="Product ID.")]) -> None
 def remove(
     product_id: Annotated[int, typer.Argument(help="Product ID.")],
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation.")] = False,
+    user: UserOption = None,
 ) -> None:
-    """Stop tracking a product and delete its history."""
+    """Stop watching a product. It is deleted once nobody watches it."""
     try:
         with session_scope() as session:
-            product = _service(session).get(product_id)
+            product = _service(session, user).get(product_id)
             label = product.name or product.url
     except NotFoundError as exc:
         error(str(exc))
@@ -161,7 +170,7 @@ def remove(
         )
 
     with session_scope() as session:
-        _service(session).remove(product_id)
+        _service(session, user).remove(product_id)
     success(f"removed product {product_id}")
 
 

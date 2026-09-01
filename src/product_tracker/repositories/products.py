@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, exists, func, select
 from sqlalchemy.orm import joinedload
 
-from ..db.models import Product, Store
+from ..db.models import Product, Store, Subscription
 from ..domain.enums import TrackingStatus
 from .base import Repository
 
@@ -29,12 +29,23 @@ class ProductRepository(Repository[Product]):
         *,
         store_slug: str | None,
         tracking_status: TrackingStatus | None,
+        subscriber_id: int | None = None,
     ) -> Select[tuple[Product]]:
         stmt = select(Product)
         if store_slug is not None:
             stmt = stmt.join(Store, Product.store_id == Store.id).where(Store.slug == store_slug)
         if tracking_status is not None:
             stmt = stmt.where(Product.tracking_status == tracking_status)
+        if subscriber_id is not None:
+            # Listings are shared, so a watchlist is defined by subscription, not by the
+            # products table. EXISTS rather than a join: a join would need DISTINCT once a
+            # listing has several subscribers, and would quietly change the row count.
+            stmt = stmt.where(
+                exists().where(
+                    Subscription.product_id == Product.id,
+                    Subscription.user_id == subscriber_id,
+                )
+            )
         return stmt
 
     def list_page(
@@ -44,9 +55,14 @@ class ProductRepository(Repository[Product]):
         offset: int,
         store_slug: str | None = None,
         tracking_status: TrackingStatus | None = None,
+        subscriber_id: int | None = None,
     ) -> list[Product]:
         stmt = (
-            self._filtered(store_slug=store_slug, tracking_status=tracking_status)
+            self._filtered(
+                store_slug=store_slug,
+                tracking_status=tracking_status,
+                subscriber_id=subscriber_id,
+            )
             .options(joinedload(Product.store))
             .order_by(Product.id)
             .limit(limit)
@@ -59,9 +75,12 @@ class ProductRepository(Repository[Product]):
         *,
         store_slug: str | None = None,
         tracking_status: TrackingStatus | None = None,
+        subscriber_id: int | None = None,
     ) -> int:
         inner = self._filtered(
-            store_slug=store_slug, tracking_status=tracking_status
+            store_slug=store_slug,
+            tracking_status=tracking_status,
+            subscriber_id=subscriber_id,
         ).subquery()
         stmt = select(func.count()).select_from(inner)
         return int(self.session.execute(stmt).scalar_one())

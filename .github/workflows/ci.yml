@@ -144,7 +144,10 @@ jobs:
           alembic downgrade base
           alembic upgrade head --sql > /tmp/schema.sql
           grep -q "CREATE TABLE products" /tmp/schema.sql
+          grep -q "CREATE TABLE users" /tmp/schema.sql
+          grep -q "CREATE TABLE variant_listings" /tmp/schema.sql
           grep -q "INSERT INTO stores" /tmp/schema.sql
+          grep -q "INSERT INTO users" /tmp/schema.sql
           ! grep -qE "VALUES \(NULL" /tmp/schema.sql
 
   docker:

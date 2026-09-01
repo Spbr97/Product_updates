@@ -236,10 +236,12 @@ class TestDesiredSchedule:
         from product_tracker.db.session import session_scope
         from product_tracker.domain.enums import TrackingStatus
         from product_tracker.services.alert_service import AlertService
+        from product_tracker.services.user_service import default_user
 
         product_id = add_committed()
         with session_scope() as session:
-            AlertService(session).set_tracking_status(product_id, TrackingStatus.PAUSED)
+            service = AlertService(session, default_user(session).id)
+            service.set_tracking_status(product_id, TrackingStatus.PAUSED)
 
         assert product_id not in desired_schedule(get_settings())
 

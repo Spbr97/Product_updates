@@ -46,15 +46,21 @@ def build_matrix(
     session: Session,
     slug: str,
     *,
+    user_id: int,
     stale_after: timedelta = DEFAULT_STALE_AFTER,
     now: datetime | None = None,
 ) -> ComparisonMatrix:
-    """Assemble the comparison grid for one group.
+    """Assemble the comparison grid for one of ``user_id``'s groups.
 
-    Raises :class:`GroupNotFoundError` when the slug is unknown.
+    Raises :class:`GroupNotFoundError` when the slug is unknown *to this user* -- a group
+    someone else owns is not found rather than forbidden, so the response does not confirm
+    that it exists.
+
+    The listings and prices inside the grid are shared data: several users can compare the
+    same tracked URLs, and each fetch serves all of them.
     """
     repo = GroupRepository(session)
-    group = repo.get_by_slug(slug)
+    group = repo.get_by_slug(user_id, slug)
     if group is None:
         raise GroupNotFoundError(slug)
 

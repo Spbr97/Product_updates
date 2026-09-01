@@ -14,7 +14,14 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload, selectinload
 
-from ..db.models import CheckExecution, PriceHistory, Product, ProductGroup, ProductVariant
+from ..db.models import (
+    CheckExecution,
+    PriceHistory,
+    Product,
+    ProductGroup,
+    ProductVariant,
+    VariantListing,
+)
 from .base import Repository
 
 
@@ -36,23 +43,31 @@ class GridData:
 class GroupRepository(Repository[ProductGroup]):
     model = ProductGroup
 
-    def get_by_slug(self, slug: str) -> ProductGroup | None:
-        stmt = select(ProductGroup).where(ProductGroup.slug == slug)
+    def get_by_slug(self, user_id: int, slug: str) -> ProductGroup | None:
+        """One user's group. Scoped by owner, so a slug someone else owns simply does not
+        exist from here -- which is what makes a 404, rather than a 403, the honest answer."""
+        stmt = select(ProductGroup).where(
+            ProductGroup.user_id == user_id, ProductGroup.slug == slug
+        )
         return self.session.execute(stmt).scalar_one_or_none()
 
-    def list_all(self) -> list[ProductGroup]:
+    def list_all(self, user_id: int) -> list[ProductGroup]:
         stmt = (
             select(ProductGroup)
+            .where(ProductGroup.user_id == user_id)
             .options(selectinload(ProductGroup.variants))
             .order_by(ProductGroup.name)
         )
         return list(self.session.execute(stmt).scalars().unique())
 
-    def listing_counts(self) -> dict[int, int]:
+    def listing_counts(self, user_id: int) -> dict[int, int]:
         """group_id -> number of attached listings, in one query."""
         stmt = (
             select(ProductVariant.group_id, func.count(Product.id))
-            .join(Product, Product.variant_id == ProductVariant.id)
+            .join(VariantListing, VariantListing.variant_id == ProductVariant.id)
+            .join(Product, Product.id == VariantListing.product_id)
+            .join(ProductGroup, ProductGroup.id == ProductVariant.group_id)
+            .where(ProductGroup.user_id == user_id)
             .group_by(ProductVariant.group_id)
         )
         return {row[0]: int(row[1]) for row in self.session.execute(stmt)}
@@ -72,22 +87,24 @@ class GroupRepository(Repository[ProductGroup]):
         if not variant_ids:
             return GridData(group, variants, {}, {}, {})
 
-        products = list(
+        rows = list(
             self.session.execute(
-                select(Product)
-                .where(Product.variant_id.in_(variant_ids))
+                select(VariantListing.variant_id, Product)
+                .join(Product, Product.id == VariantListing.product_id)
+                .where(VariantListing.variant_id.in_(variant_ids))
                 .options(joinedload(Product.store))
                 .order_by(Product.id)
             )
-            .scalars()
             .unique()
             .all()
         )
 
         by_variant: dict[int, list[Product]] = {variant_id: [] for variant_id in variant_ids}
-        for product in products:
-            if product.variant_id is not None:
-                by_variant[product.variant_id].append(product)
+        seen: dict[int, Product] = {}
+        for variant_id, product in rows:
+            by_variant[variant_id].append(product)
+            seen[product.id] = product
+        products = list(seen.values())
 
         return GridData(
             group,

@@ -15,7 +15,10 @@ from sqlalchemy.orm import Session
 
 from ..core.config import Settings, get_settings
 from ..core.security import requires_key_for_reads, verify_api_key
+from ..db.models import User
 from ..db.session import get_session_factory
+from ..repositories.users import UserRepository
+from ..services.user_service import default_user, resolve_user
 
 #: Sent by clients that authenticate. Declared once so the header name cannot drift
 #: between the dependency and the OpenAPI description.
@@ -96,3 +99,47 @@ PageParams = Annotated[Pagination, Depends(pagination)]
 RequireWrite = Depends(require_write)
 #: Attached once to the versioned router; every route below it inherits the read check.
 RequireRead = Depends(require_read)
+
+
+def current_user(
+    session: DbSession,
+    settings: Annotated[Settings, Depends(get_config)],
+    api_key: ApiKeyHeader = None,
+) -> User:
+    """The account this request acts as.
+
+    With authentication switched off -- no ``API_KEY`` and no user holding a key -- this is
+    the default account, so a single-user install needs no credential and behaves exactly
+    as it did before accounts existed.
+    """
+    user = resolve_user(session, settings, api_key)
+    if user is None:
+        raise _unauthorised()
+    return user
+
+
+def current_reader(
+    session: DbSession,
+    settings: Annotated[Settings, Depends(get_config)],
+    api_key: ApiKeyHeader = None,
+) -> User:
+    """The account a *read* acts as.
+
+    ``API_ALLOW_ANONYMOUS_READS`` stops applying once any user holds their own key, and
+    that is not an oversight. Reads used to expose one global dataset; now they expose a
+    particular person's subscriptions, groups, and alerts, and an unidentified caller
+    cannot be scoped to any of them. Serving them the default account's data instead would
+    hand one user's watchlist to anyone who asked.
+    """
+    user = resolve_user(session, settings, api_key)
+    if user is not None:
+        return user
+    if not settings.api_allow_anonymous_reads:
+        raise _unauthorised()
+    if UserRepository(session).any_key_configured():
+        raise _unauthorised()
+    return default_user(session)
+
+
+CurrentUser = Annotated[User, Depends(current_user)]
+CurrentReader = Annotated[User, Depends(current_reader)]

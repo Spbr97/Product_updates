@@ -84,6 +84,78 @@ class Store(Base):
     products: Mapped[list[Product]] = relationship(back_populates="store")
 
 
+class User(Base):
+    """An account.
+
+    Only ever holds a SHA-256 of the API key, never the key itself: a database dump, a log
+    line, or a support query can therefore never reveal a working credential. The key is
+    shown once, at creation, and cannot be recovered afterwards -- only replaced.
+    """
+
+    __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_users_email"),
+        # Unique so one key can never resolve to two accounts.
+        UniqueConstraint("api_key_hash", name="uq_users_api_key_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(200))
+    api_key_hash: Mapped[str | None] = mapped_column(String(64))
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    is_admin: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    subscriptions: Mapped[list[Subscription]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class Subscription(Base):
+    """One user watching one listing.
+
+    This is what makes listings shareable. The product row and its price history are global,
+    so two users tracking the same URL cost the retailer one fetch rather than two, and a
+    user joining later sees the whole history that already exists.
+    """
+
+    __tablename__ = "subscriptions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "product_id", name="uq_subscriptions_user_product"),
+        Index("ix_subscriptions_product_id", "product_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+    )
+    # Per subscriber, so one user pausing does not stop everyone else's updates for a
+    # listing they all watch. The product is checked while any subscriber wants it.
+    paused: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    user: Mapped[User] = relationship(back_populates="subscriptions")
+    product: Mapped[Product] = relationship(lazy="joined")
+
+
 class ProductGroup(Base):
     """One real-world product, across every model, colour and shop that sells it.
 
@@ -93,9 +165,16 @@ class ProductGroup(Base):
     """
 
     __tablename__ = "product_groups"
-    __table_args__ = (UniqueConstraint("slug", name="uq_product_groups_slug"),)
+    __table_args__ = (
+        # Per user, not global: two people may each keep an "iphone-17".
+        UniqueConstraint("user_id", "slug", name="uq_product_groups_user_slug"),
+        Index("ix_product_groups_user_id", "user_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     slug: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     brand: Mapped[str | None] = mapped_column(String(100))
@@ -150,7 +229,40 @@ class ProductVariant(Base):
     )
 
     group: Mapped[ProductGroup] = relationship(back_populates="variants")
-    products: Mapped[list[Product]] = relationship(back_populates="variant")
+    listings: Mapped[list[VariantListing]] = relationship(
+        back_populates="variant", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class VariantListing(Base):
+    """A listing that sells a given variant, in one user's grouping.
+
+    A join table rather than a column on ``products``, because a product row is shared
+    between users while grouping is private to each. With a single column, the second user
+    to group a listing silently removed it from the first user's comparison -- their grid
+    lost a column with nothing to explain it. The variant already belongs to a group, and
+    the group to a user, so this link is per-user by construction.
+    """
+
+    __tablename__ = "variant_listings"
+    __table_args__ = (
+        UniqueConstraint("variant_id", "product_id", name="uq_variant_listings"),
+        Index("ix_variant_listings_product_id", "product_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    variant_id: Mapped[int] = mapped_column(
+        ForeignKey("product_variants.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    variant: Mapped[ProductVariant] = relationship(back_populates="listings")
+    product: Mapped[Product] = relationship(lazy="joined")
 
 
 class Product(Base):
@@ -177,10 +289,6 @@ class Product(Base):
     url_canonical: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     store_id: Mapped[int] = mapped_column(
         ForeignKey("stores.id", ondelete="RESTRICT"), nullable=False
-    )
-    # Nullable: a listing can be tracked on its own, before anyone groups it.
-    variant_id: Mapped[int | None] = mapped_column(
-        ForeignKey("product_variants.id", ondelete="SET NULL")
     )
 
     name: Mapped[str | None] = mapped_column(Text)
@@ -224,7 +332,6 @@ class Product(Base):
     )
 
     store: Mapped[Store] = relationship(back_populates="products", lazy="joined")
-    variant: Mapped[ProductVariant | None] = relationship(back_populates="products")
     price_history: Mapped[list[PriceHistory]] = relationship(
         back_populates="product", cascade="all, delete-orphan", passive_deletes=True
     )
@@ -306,6 +413,7 @@ class TrackingRule(Base):
     __tablename__ = "tracking_rules"
     __table_args__ = (
         Index("ix_tracking_rules_product_id_enabled", "product_id", "enabled"),
+        Index("ix_tracking_rules_user_id", "user_id"),
         CheckConstraint(
             "cooldown_seconds IS NULL OR cooldown_seconds >= 0", name="cooldown_non_negative"
         ),
@@ -314,6 +422,11 @@ class TrackingRule(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     product_id: Mapped[int] = mapped_column(
         ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+    )
+    # Alerts express intent, so they belong to whoever set them. Two people watching the
+    # same listing can hold different targets without seeing each other's.
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     rule_type: Mapped[RuleType] = mapped_column(_pg_enum(RuleType, "rule_type"), nullable=False)
     params: Mapped[dict[str, Any]] = mapped_column(

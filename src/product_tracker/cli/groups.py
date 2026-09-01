@@ -23,6 +23,7 @@ from ..services import group_service
 from ..services.comparison import DEFAULT_STALE_AFTER, GroupNotFoundError, build_matrix
 from ..utils.money import format_money_short
 from .formatting import ExitCode, error, info, stdout, success, table
+from .users import UserOption, acting_user
 
 groups_app = typer.Typer(help="Group listings by product and model.", no_args_is_help=True)
 
@@ -172,6 +173,7 @@ def compare(
         str,
         typer.Option("--layout", help="grid, list, or auto (grid when it fits)."),
     ] = "auto",
+    user: UserOption = None,
 ) -> None:
     """Compare one product across its models and every shop that sells it."""
     if layout not in {"auto", "grid", "list"}:
@@ -180,7 +182,12 @@ def compare(
 
     with session_scope() as session:
         try:
-            matrix = build_matrix(session, slug, stale_after=timedelta(hours=stale_hours))
+            matrix = build_matrix(
+                session,
+                slug,
+                user_id=acting_user(session, user).id,
+                stale_after=timedelta(hours=stale_hours),
+            )
         except GroupNotFoundError as exc:
             error(str(exc))
             raise typer.Exit(ExitCode.NOT_FOUND) from exc
@@ -216,12 +223,13 @@ def compare(
         stdout.print()
 
 
-def list_groups() -> None:
+def list_groups(user: UserOption = None) -> None:
     """List product groups."""
     with session_scope() as session:
+        owner = acting_user(session, user)
         repo = GroupRepository(session)
-        groups = repo.list_all()
-        counts = repo.listing_counts()
+        groups = repo.list_all(owner.id)
+        counts = repo.listing_counts(owner.id)
 
         if not groups:
             info("No product groups yet. Create one with: product-tracker groups add <name>")
@@ -245,11 +253,18 @@ def add_group(
         str | None, typer.Option("--slug", help="URL-safe id. Derived from the name if omitted.")
     ] = None,
     brand: Annotated[str | None, typer.Option("--brand", help="Manufacturer.")] = None,
+    user: UserOption = None,
 ) -> None:
     """Create a product group."""
     try:
         with session_scope() as session:
-            group = group_service.create_group(session, slug=slug, name=name, brand=brand)
+            group = group_service.create_group(
+                session,
+                user_id=acting_user(session, user).id,
+                slug=slug,
+                name=name,
+                brand=brand,
+            )
             created = group.slug
     except ValidationError as exc:
         error(str(exc))
@@ -260,11 +275,14 @@ def add_group(
     success(f"created group {created}")
 
 
-def remove_group(slug: Annotated[str, typer.Argument(help="Group slug.")]) -> None:
+def remove_group(
+    slug: Annotated[str, typer.Argument(help="Group slug.")],
+    user: UserOption = None,
+) -> None:
     """Delete a group. Tracked listings and their price history are kept."""
     try:
         with session_scope() as session:
-            group_service.delete_group(session, slug)
+            group_service.delete_group(session, acting_user(session, user).id, slug)
     except NotFoundError as exc:
         error(str(exc))
         raise typer.Exit(ExitCode.NOT_FOUND) from exc
@@ -278,12 +296,17 @@ def attach(
         str | None,
         typer.Option("--variant", help="Model label, e.g. '256GB / Lavender'. Inferred if unset."),
     ] = None,
+    user: UserOption = None,
 ) -> None:
     """Attach a tracked listing to the model it sells."""
     try:
         with session_scope() as session:
             product, resolved = group_service.attach_product(
-                session, product_id, group_slug=group, label=variant
+                session,
+                product_id,
+                user_id=acting_user(session, user).id,
+                group_slug=group,
+                label=variant,
             )
             label, store = resolved.label, product.store.name
     except NotFoundError as exc:
@@ -295,11 +318,14 @@ def attach(
     success(f"product {product_id} ({store}) is now {group} / {label}")
 
 
-def detach(product_id: Annotated[int, typer.Argument(help="Tracked product id.")]) -> None:
+def detach(
+    product_id: Annotated[int, typer.Argument(help="Tracked product id.")],
+    user: UserOption = None,
+) -> None:
     """Remove a listing from its group. Tracking and history are unaffected."""
     try:
         with session_scope() as session:
-            group_service.detach_product(session, product_id)
+            group_service.detach_product(session, product_id, acting_user(session, user).id)
     except NotFoundError as exc:
         error(str(exc))
         raise typer.Exit(ExitCode.NOT_FOUND) from exc

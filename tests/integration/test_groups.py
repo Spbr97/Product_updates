@@ -27,6 +27,7 @@ from product_tracker.db.models import (
     ProductGroup,
     ProductVariant,
     Store,
+    VariantListing,
 )
 from product_tracker.domain.enums import (
     Availability,
@@ -51,7 +52,14 @@ def counted_queries(session: Session) -> Iterator[list[str]]:
     statements: list[str] = []
     engine = session.get_bind()
 
-    def record(_conn, _cursor, statement, _params, _context, _many) -> None:  # type: ignore[no-untyped-def]
+    def record(
+        _conn,
+        _cursor,
+        statement,
+        _params,
+        _context,
+        _many,
+    ) -> None:  # type: ignore[no-untyped-def]
         statements.append(statement)
 
     event.listen(engine, "before_cursor_execute", record)
@@ -102,6 +110,17 @@ def make_product(
     return product
 
 
+def _links_for(session: Session, product_id: int) -> int:
+    """How many variants this listing is attached to, across every user's grouping."""
+    return int(
+        session.execute(
+            select(func.count())
+            .select_from(VariantListing)
+            .where(VariantListing.product_id == product_id)
+        ).scalar_one()
+    )
+
+
 def record_check(
     session: Session, product: Product, *, status: CheckStatus, outcome: FetchOutcome | None
 ) -> None:
@@ -119,30 +138,45 @@ def record_check(
 
 
 class TestCreatingGroups:
-    def test_slug_is_derived_from_the_name(self, db_session: Session) -> None:
-        group = group_service.create_group(db_session, slug=None, name="iPhone 17 Pro")
+    def test_slug_is_derived_from_the_name(self, db_session: Session, owner_id: int) -> None:
+        group = group_service.create_group(
+            db_session,
+            user_id=owner_id,
+            slug=None,
+            name="iPhone 17 Pro",
+        )
         assert group.slug == "iphone-17-pro"
 
-    def test_duplicate_slug_is_rejected(self, db_session: Session) -> None:
-        group_service.create_group(db_session, slug="iphone-17", name="iPhone 17")
+    def test_duplicate_slug_is_rejected(self, db_session: Session, owner_id: int) -> None:
+        group_service.create_group(db_session, user_id=owner_id, slug="iphone-17", name="iPhone 17")
         with pytest.raises(DuplicateError):
-            group_service.create_group(db_session, slug="iphone-17", name="Another")
+            group_service.create_group(
+                db_session,
+                user_id=owner_id,
+                slug="iphone-17",
+                name="Another",
+            )
 
-    def test_a_blank_name_is_rejected(self, db_session: Session) -> None:
+    def test_a_blank_name_is_rejected(self, db_session: Session, owner_id: int) -> None:
         with pytest.raises(ValidationError):
-            group_service.create_group(db_session, slug=None, name="   ")
+            group_service.create_group(db_session, user_id=owner_id, slug=None, name="   ")
 
-    def test_an_unusable_slug_is_rejected(self, db_session: Session) -> None:
+    def test_an_unusable_slug_is_rejected(self, db_session: Session, owner_id: int) -> None:
         with pytest.raises(ValidationError):
-            group_service.create_group(db_session, slug="Not A Slug!", name="x")
+            group_service.create_group(db_session, user_id=owner_id, slug="Not A Slug!", name="x")
 
 
 class TestAttaching:
     def test_two_shops_spelling_a_model_differently_share_one_variant(
-        self, db_session: Session
+        self, db_session: Session, owner_id: int
     ) -> None:
         """The property the comparison grid depends on entirely."""
-        group = group_service.create_group(db_session, slug="iphone-17", name="iPhone 17")
+        group = group_service.create_group(
+            db_session,
+            user_id=owner_id,
+            slug="iphone-17",
+            name="iPhone 17",
+        )
         flipkart = make_product(
             db_session, make_store(db_session, "flipkart"), name="Apple iPhone 17 (Black, 256 GB)"
         )
@@ -150,8 +184,18 @@ class TestAttaching:
             db_session, make_store(db_session, "reliance"), name="Apple iPhone 17 256 GB, Black"
         )
 
-        _, first = group_service.attach_product(db_session, flipkart.id, group_slug=group.slug)
-        _, second = group_service.attach_product(db_session, reliance.id, group_slug=group.slug)
+        _, first = group_service.attach_product(
+            db_session,
+            flipkart.id,
+            user_id=owner_id,
+            group_slug=group.slug,
+        )
+        _, second = group_service.attach_product(
+            db_session,
+            reliance.id,
+            user_id=owner_id,
+            group_slug=group.slug,
+        )
 
         assert first.id == second.id
         assert first.label == "256GB / Black"
@@ -159,62 +203,114 @@ class TestAttaching:
         assert variants.scalar_one() == 1
 
     def test_a_title_with_no_clues_is_refused_rather_than_guessed(
-        self, db_session: Session
+        self, db_session: Session, owner_id: int
     ) -> None:
-        group = group_service.create_group(db_session, slug="misc", name="Misc")
+        group = group_service.create_group(db_session, user_id=owner_id, slug="misc", name="Misc")
         product = make_product(
             db_session, make_store(db_session, "shop"), name="Mystery Item",
             url="https://shop.com/thing/p/1",
         )
         with pytest.raises(ValidationError, match="could not infer"):
-            group_service.attach_product(db_session, product.id, group_slug=group.slug)
+            group_service.attach_product(
+                db_session,
+                product.id,
+                user_id=owner_id,
+                group_slug=group.slug,
+            )
 
-    def test_the_url_slug_is_used_when_there_is_no_title(self, db_session: Session) -> None:
+    def test_the_url_slug_is_used_when_there_is_no_title(
+        self,
+        db_session: Session,
+        owner_id: int,
+    ) -> None:
         """A blocked shop leaves no title, but the retailer still names the model in the path."""
-        group = group_service.create_group(db_session, slug="iphone-17", name="iPhone 17")
+        group = group_service.create_group(
+            db_session,
+            user_id=owner_id,
+            slug="iphone-17",
+            name="iPhone 17",
+        )
         product = make_product(
             db_session, make_store(db_session, "croma"), name=None, price=None,
             url="https://www.croma.com/apple-iphone-17-256gb-black-/p/317396",
         )
-        _, variant = group_service.attach_product(db_session, product.id, group_slug=group.slug)
+        _, variant = group_service.attach_product(
+            db_session,
+            product.id,
+            user_id=owner_id,
+            group_slug=group.slug,
+        )
         assert variant.label == "256GB / Black"
 
-    def test_an_explicit_label_overrides_inference(self, db_session: Session) -> None:
-        group = group_service.create_group(db_session, slug="iphone-17", name="iPhone 17")
+    def test_an_explicit_label_overrides_inference(
+        self,
+        db_session: Session,
+        owner_id: int,
+    ) -> None:
+        group = group_service.create_group(
+            db_session,
+            user_id=owner_id,
+            slug="iphone-17",
+            name="iPhone 17",
+        )
         product = make_product(
             db_session, make_store(db_session, "flipkart"), name="Apple iPhone 17 (Black, 256 GB)"
         )
         _, variant = group_service.attach_product(
-            db_session, product.id, group_slug=group.slug, label="My Own Label"
+            db_session, product.id, user_id=owner_id, group_slug=group.slug, label="My Own Label"
         )
         assert variant.label == "My Own Label"
 
-    def test_attaching_an_unknown_product_is_a_not_found(self, db_session: Session) -> None:
-        group_service.create_group(db_session, slug="g", name="G")
+    def test_attaching_an_unknown_product_is_a_not_found(
+        self,
+        db_session: Session,
+        owner_id: int,
+    ) -> None:
+        group_service.create_group(db_session, user_id=owner_id, slug="g", name="G")
         with pytest.raises(NotFoundError):
-            group_service.attach_product(db_session, 99999, group_slug="g")
+            group_service.attach_product(db_session, 99999, user_id=owner_id, group_slug="g")
 
-    def test_detaching_leaves_the_listing_tracked(self, db_session: Session) -> None:
-        group = group_service.create_group(db_session, slug="iphone-17", name="iPhone 17")
+    def test_detaching_leaves_the_listing_tracked(self, db_session: Session, owner_id: int) -> None:
+        group = group_service.create_group(
+            db_session,
+            user_id=owner_id,
+            slug="iphone-17",
+            name="iPhone 17",
+        )
         product = make_product(
             db_session, make_store(db_session, "flipkart"), name="Apple iPhone 17 (Black, 256 GB)"
         )
-        group_service.attach_product(db_session, product.id, group_slug=group.slug)
-        detached = group_service.detach_product(db_session, product.id)
+        group_service.attach_product(
+            db_session,
+            product.id,
+            user_id=owner_id,
+            group_slug=group.slug,
+        )
+        detached = group_service.detach_product(db_session, product.id, owner_id)
 
-        assert detached.variant_id is None
+        assert _links_for(db_session, detached.id) == 0
         assert db_session.get(Product, product.id) is not None
 
 
 class TestDeletingAGroupIsSafe:
     """Grouping is an overlay. Removing it must cost nothing but the grouping."""
 
-    def test_listings_and_price_history_survive(self, db_session: Session) -> None:
-        group = group_service.create_group(db_session, slug="iphone-17", name="iPhone 17")
+    def test_listings_and_price_history_survive(self, db_session: Session, owner_id: int) -> None:
+        group = group_service.create_group(
+            db_session,
+            user_id=owner_id,
+            slug="iphone-17",
+            name="iPhone 17",
+        )
         product = make_product(
             db_session, make_store(db_session, "flipkart"), name="Apple iPhone 17 (Black, 256 GB)"
         )
-        group_service.attach_product(db_session, product.id, group_slug=group.slug)
+        group_service.attach_product(
+            db_session,
+            product.id,
+            user_id=owner_id,
+            group_slug=group.slug,
+        )
         db_session.add(
             PriceHistory(
                 product_id=product.id, price=Decimal("82900.00"), currency="INR", observed_at=NOW
@@ -222,14 +318,14 @@ class TestDeletingAGroupIsSafe:
         )
         db_session.flush()
 
-        group_service.delete_group(db_session, "iphone-17")
+        group_service.delete_group(db_session, owner_id, "iphone-17")
         db_session.flush()
         db_session.expire_all()
 
         survivor = db_session.get(Product, product.id)
         assert survivor is not None
         # The listing keeps tracking; it has simply lost its grouping.
-        assert survivor.variant_id is None
+        assert _links_for(db_session, survivor.id) == 0
         history = db_session.execute(
             select(func.count()).select_from(PriceHistory).where(
                 PriceHistory.product_id == product.id
@@ -237,14 +333,28 @@ class TestDeletingAGroupIsSafe:
         ).scalar_one()
         assert history == 1
 
-    def test_variants_are_removed_with_their_group(self, db_session: Session) -> None:
-        group = group_service.create_group(db_session, slug="iphone-17", name="iPhone 17")
+    def test_variants_are_removed_with_their_group(
+        self,
+        db_session: Session,
+        owner_id: int,
+    ) -> None:
+        group = group_service.create_group(
+            db_session,
+            user_id=owner_id,
+            slug="iphone-17",
+            name="iPhone 17",
+        )
         product = make_product(
             db_session, make_store(db_session, "flipkart"), name="Apple iPhone 17 (Black, 256 GB)"
         )
-        group_service.attach_product(db_session, product.id, group_slug=group.slug)
+        group_service.attach_product(
+            db_session,
+            product.id,
+            user_id=owner_id,
+            group_slug=group.slug,
+        )
 
-        group_service.delete_group(db_session, "iphone-17")
+        group_service.delete_group(db_session, owner_id, "iphone-17")
         db_session.flush()
 
         remaining = db_session.execute(
@@ -255,9 +365,9 @@ class TestDeletingAGroupIsSafe:
 
 class TestTheGrid:
     @staticmethod
-    def build_iphone_group(session: Session) -> ProductGroup:
+    def build_iphone_group(session: Session, owner_id: int) -> ProductGroup:
         group = group_service.create_group(
-            session, slug="iphone-17", name="iPhone 17", brand="Apple"
+            session, user_id=owner_id, slug="iphone-17", name="iPhone 17", brand="Apple"
         )
         shops = {slug: make_store(session, slug) for slug in ("flipkart", "reliance", "croma")}
 
@@ -279,7 +389,12 @@ class TestTheGrid:
         )
 
         for product in (black_flipkart, black_reliance, black_croma, sage_flipkart):
-            group_service.attach_product(session, product.id, group_slug=group.slug)
+            group_service.attach_product(
+                session,
+                product.id,
+                user_id=owner_id,
+                group_slug=group.slug,
+            )
 
         record_check(session, black_flipkart, status=CheckStatus.SUCCESS, outcome=None)
         record_check(session, black_reliance, status=CheckStatus.SUCCESS, outcome=None)
@@ -287,17 +402,21 @@ class TestTheGrid:
         record_check(session, sage_flipkart, status=CheckStatus.SUCCESS, outcome=None)
         return group
 
-    def test_shape_is_models_by_shops(self, db_session: Session) -> None:
-        self.build_iphone_group(db_session)
-        matrix = build_matrix(db_session, "iphone-17", now=NOW)
+    def test_shape_is_models_by_shops(self, db_session: Session, owner_id: int) -> None:
+        self.build_iphone_group(db_session, owner_id)
+        matrix = build_matrix(db_session, "iphone-17", user_id=owner_id, now=NOW)
 
         assert {row.label for row in matrix.rows} == {"256GB / Black", "256GB / Sage"}
         assert set(matrix.store_slugs) == {"flipkart", "reliance", "croma"}
 
-    def test_each_kind_of_absence_is_reported_distinctly(self, db_session: Session) -> None:
+    def test_each_kind_of_absence_is_reported_distinctly(
+        self,
+        db_session: Session,
+        owner_id: int,
+    ) -> None:
         """The point of the whole feature: four blanks, four different meanings."""
-        self.build_iphone_group(db_session)
-        matrix = build_matrix(db_session, "iphone-17", now=NOW)
+        self.build_iphone_group(db_session, owner_id)
+        matrix = build_matrix(db_session, "iphone-17", user_id=owner_id, now=NOW)
         rows = {row.label: row for row in matrix.rows}
 
         black, sage = rows["256GB / Black"], rows["256GB / Sage"]
@@ -307,17 +426,21 @@ class TestTheGrid:
         # Nobody tracks the Sage at Reliance -- which is not a claim about stock.
         assert sage.cells["reliance"].status is CellStatus.NOT_TRACKED
 
-    def test_best_price_picks_the_cheaper_shop(self, db_session: Session) -> None:
-        self.build_iphone_group(db_session)
-        matrix = build_matrix(db_session, "iphone-17", now=NOW)
+    def test_best_price_picks_the_cheaper_shop(self, db_session: Session, owner_id: int) -> None:
+        self.build_iphone_group(db_session, owner_id)
+        matrix = build_matrix(db_session, "iphone-17", user_id=owner_id, now=NOW)
         black = next(row for row in matrix.rows if row.label == "256GB / Black")
 
         assert black.best_price == Decimal("82900.00")
         assert black.best_store_slugs == ("flipkart",)
         assert black.spread == Decimal("600.00")
 
-    def test_previous_price_drives_the_movement_arrow(self, db_session: Session) -> None:
-        group = self.build_iphone_group(db_session)
+    def test_previous_price_drives_the_movement_arrow(
+        self,
+        db_session: Session,
+        owner_id: int,
+    ) -> None:
+        group = self.build_iphone_group(db_session, owner_id)
         product = db_session.execute(
             select(Product).where(Product.store_id == db_session.execute(
                 select(Store.id).where(Store.slug == "reliance")
@@ -337,35 +460,41 @@ class TestTheGrid:
         )
         db_session.flush()
 
-        matrix = build_matrix(db_session, group.slug, now=NOW)
+        matrix = build_matrix(db_session, group.slug, user_id=owner_id, now=NOW)
         cell = next(r for r in matrix.rows if r.label == "256GB / Black").cells["reliance"]
         assert cell.previous_price == Decimal("85000.00")
         assert cell.price_delta == Decimal("-1500.00")
 
-    def test_stale_prices_are_flagged(self, db_session: Session) -> None:
-        self.build_iphone_group(db_session)
+    def test_stale_prices_are_flagged(self, db_session: Session, owner_id: int) -> None:
+        self.build_iphone_group(db_session, owner_id)
         matrix = build_matrix(
-            db_session, "iphone-17", stale_after=timedelta(hours=6), now=NOW + timedelta(days=3)
+            db_session, "iphone-17", user_id=owner_id, stale_after=timedelta(
+                hours=6,
+            ), now=NOW + timedelta(days=3)
         )
         cell = next(r for r in matrix.rows if r.label == "256GB / Black").cells["flipkart"]
         assert cell.is_stale
         assert cell.status is CellStatus.OK
 
-    def test_an_unknown_slug_raises(self, db_session: Session) -> None:
+    def test_an_unknown_slug_raises(self, db_session: Session, owner_id: int) -> None:
         with pytest.raises(GroupNotFoundError):
-            build_matrix(db_session, "no-such-group")
+            build_matrix(db_session, "no-such-group", user_id=owner_id)
 
-    def test_grid_loads_in_a_fixed_number_of_queries(self, db_session: Session) -> None:
+    def test_grid_loads_in_a_fixed_number_of_queries(
+        self,
+        db_session: Session,
+        owner_id: int,
+    ) -> None:
         """Guards against the obvious N+1 rewrite.
 
         Four listings across two models load in the same four queries as four hundred
         would: variants, listings, previous prices, last checks.
         """
-        group = self.build_iphone_group(db_session)
+        group = self.build_iphone_group(db_session, owner_id)
         db_session.expire_all()
 
         repo = GroupRepository(db_session)
-        loaded = repo.get_by_slug(group.slug)
+        loaded = repo.get_by_slug(owner_id, group.slug)
         assert loaded is not None
         with counted_queries(db_session) as statements:
             repo.load_grid(loaded)

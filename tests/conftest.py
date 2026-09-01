@@ -148,8 +148,12 @@ def strict_url_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_settings_cache()
 
 
+#: The account seeded by migration 0007, which ``clean_db`` preserves.
+DEFAULT_USER_EMAIL = "local@localhost"
+
 #: Tables holding test-created data. ``stores`` is excluded -- it is seeded by migration
-#: and products reference it.
+#: and products reference it. ``users`` too: the default account is seeded, and the rest
+#: are removed by the DELETE in ``clean_db``.
 _DATA_TABLES = (
     "notifications",
     "tracking_rules",
@@ -162,6 +166,7 @@ _DATA_TABLES = (
     # nonsense. Listed after products because products reference variants.
     "product_variants",
     "product_groups",
+    "subscriptions",
     # Scheduler jobs and heartbeats too: a test that touches either would otherwise
     # leave rows that make a later test believe a worker is scheduled or alive.
     "apscheduler_jobs",
@@ -184,11 +189,20 @@ def clean_db(db_env: None) -> Iterator[None]:
     statement = text(
         f"TRUNCATE {', '.join(_DATA_TABLES)} RESTART IDENTITY CASCADE"
     )
-    with get_engine().begin() as connection:
-        connection.execute(statement)
+    # Accounts created by a test are committed, so they outlive it. The seeded default
+    # account is left alone, like the seeded stores -- but any other must go, or the first
+    # test to create a keyed user silently switches API authentication on for every test
+    # that runs after it.
+    purge_users = text("DELETE FROM users WHERE email <> :default_email")
+
+    def reset() -> None:
+        with get_engine().begin() as connection:
+            connection.execute(statement)
+            connection.execute(purge_users, {"default_email": DEFAULT_USER_EMAIL})
+
+    reset()
     yield
-    with get_engine().begin() as connection:
-        connection.execute(statement)
+    reset()
 
 
 @pytest.fixture
@@ -207,3 +221,18 @@ def db_session(db_env: None) -> Iterator[object]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture
+def owner_id(db_env: None) -> int:
+    """The seeded default account.
+
+    Groups, alert rules and subscriptions all belong to a user now, so tests need an owner
+    to attribute them to. Migration 0007 seeds this account, and ``clean_db`` leaves it
+    alone in the same way it leaves the seeded stores alone.
+    """
+    from product_tracker.db.session import session_scope
+    from product_tracker.services.user_service import default_user
+
+    with session_scope() as session:
+        return int(default_user(session).id)

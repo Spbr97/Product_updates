@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import re
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..db.models import Product, ProductGroup, ProductVariant
+from ..db.models import Product, ProductGroup, ProductVariant, VariantListing
 from ..domain.errors import DuplicateError, NotFoundError, ValidationError
 from ..repositories.groups import GroupRepository, VariantRepository
 from ..repositories.products import ProductRepository
@@ -31,12 +32,13 @@ def slugify(text: str) -> str:
 def create_group(
     session: Session,
     *,
+    user_id: int,
     slug: str | None,
     name: str,
     brand: str | None = None,
     notes: str | None = None,
 ) -> ProductGroup:
-    """Create a group. ``slug`` defaults to a slugified ``name``."""
+    """Create a group for one user. ``slug`` defaults to a slugified ``name``."""
     if not name.strip():
         raise ValidationError("a group needs a name")
 
@@ -47,24 +49,33 @@ def create_group(
         )
 
     repo = GroupRepository(session)
-    if repo.get_by_slug(resolved) is not None:
+    # Uniqueness is per user: two people may each keep an "iphone-17".
+    if repo.get_by_slug(user_id, resolved) is not None:
         raise DuplicateError("product group", resolved)
 
     return repo.add(
-        ProductGroup(slug=resolved, name=name.strip(), brand=brand, notes=notes)
+        ProductGroup(
+            user_id=user_id, slug=resolved, name=name.strip(), brand=brand, notes=notes
+        )
     )
 
 
-def get_group(session: Session, slug: str) -> ProductGroup:
-    group = GroupRepository(session).get_by_slug(slug.strip().casefold())
+def get_group(session: Session, user_id: int, slug: str) -> ProductGroup:
+    """One user's group.
+
+    A slug belonging to somebody else raises NotFoundError rather than a permission error.
+    That is the intended answer: telling an unauthorised caller "that exists but is not
+    yours" leaks the fact that it exists.
+    """
+    group = GroupRepository(session).get_by_slug(user_id, slug.strip().casefold())
     if group is None:
         raise NotFoundError("product group", slug)
     return group
 
 
-def delete_group(session: Session, slug: str) -> None:
+def delete_group(session: Session, user_id: int, slug: str) -> None:
     """Remove a group and its variants. Listings survive, with ``variant_id`` set to NULL."""
-    GroupRepository(session).delete(get_group(session, slug))
+    GroupRepository(session).delete(get_group(session, user_id, slug))
 
 
 def get_or_create_variant(
@@ -107,6 +118,7 @@ def attach_product(
     session: Session,
     product_id: int,
     *,
+    user_id: int,
     group_slug: str,
     label: str | None = None,
     attributes: dict[str, str] | None = None,
@@ -121,7 +133,7 @@ def attach_product(
     if product is None:
         raise NotFoundError("product", product_id)
 
-    group = get_group(session, group_slug)
+    group = get_group(session, user_id, group_slug)
 
     resolved_label, resolved_attrs = label, dict(attributes or {})
     if resolved_label is None and not resolved_attrs:
@@ -139,16 +151,44 @@ def attach_product(
     variant = get_or_create_variant(
         session, group, label=resolved_label, attributes=resolved_attrs
     )
-    product.variant_id = variant.id
+
+    # Move it within *this* user's grouping only. Another user's link to the same listing
+    # is untouched, which is the whole reason the link lives in its own table.
+    _clear_links(session, product_id, group.id)
+    session.add(VariantListing(variant_id=variant.id, product_id=product.id))
     session.flush()
     return product, variant
 
 
-def detach_product(session: Session, product_id: int) -> Product:
-    """Remove a listing from its group. The listing and its history are untouched."""
+def detach_product(session: Session, product_id: int, user_id: int) -> Product:
+    """Remove a listing from this user's groups. The listing and its history are untouched."""
     product = ProductRepository(session).get(product_id)
     if product is None:
         raise NotFoundError("product", product_id)
-    product.variant_id = None
+
+    links = session.execute(
+        select(VariantListing)
+        .join(ProductVariant, ProductVariant.id == VariantListing.variant_id)
+        .join(ProductGroup, ProductGroup.id == ProductVariant.group_id)
+        .where(VariantListing.product_id == product_id, ProductGroup.user_id == user_id)
+    ).scalars()
+    for link in links:
+        session.delete(link)
     session.flush()
     return product
+
+
+def _clear_links(session: Session, product_id: int, group_id: int) -> None:
+    """Drop any existing link between this listing and this group.
+
+    A listing sells one model, so re-attaching it to a different variant of the same group
+    should move it rather than leave it in both places.
+    """
+    existing = session.execute(
+        select(VariantListing)
+        .join(ProductVariant, ProductVariant.id == VariantListing.variant_id)
+        .where(VariantListing.product_id == product_id, ProductVariant.group_id == group_id)
+    ).scalars()
+    for link in existing:
+        session.delete(link)
+    session.flush()

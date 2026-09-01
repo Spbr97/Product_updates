@@ -13,6 +13,7 @@ from ..notifications.registry import ALL_PROVIDERS
 from ..repositories.notifications import NotificationRepository
 from ..services.alert_service import AlertService
 from .formatting import ExitCode, error, stdout, success, table, warn, yes_no
+from .users import UserOption, acting_user
 
 alerts_app = typer.Typer(help="Manage tracking rules (alerts).", no_args_is_help=True)
 
@@ -35,6 +36,7 @@ def alerts_add(
         int | None,
         typer.Option("--cooldown", min=0, help="Minimum seconds between firings."),
     ] = None,
+    user: UserOption = None,
 ) -> None:
     """Add a tracking rule to a product."""
     params: dict[str, object] = {}
@@ -43,7 +45,7 @@ def alerts_add(
 
     try:
         with session_scope() as session:
-            rule = AlertService(session).add(
+            rule = AlertService(session, acting_user(session, user).id).add(
                 product_id,
                 rule_type,
                 params=params,
@@ -71,11 +73,12 @@ def alerts_list(
     ] = None,
     limit: Annotated[int, typer.Option("--limit", min=1, max=500)] = 50,
     offset: Annotated[int, typer.Option("--offset", min=0)] = 0,
+    user: UserOption = None,
 ) -> None:
     """List tracking rules."""
     try:
         with session_scope() as session:
-            page = AlertService(session).list(
+            page = AlertService(session, acting_user(session, user).id).list(
                 product_id=product_id, limit=limit, offset=offset
             )
             rows = [
@@ -113,11 +116,12 @@ def alerts_list(
 def alerts_remove(
     rule_id: Annotated[int, typer.Argument(help="Alert ID.")],
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation.")] = False,
+    user: UserOption = None,
 ) -> None:
     """Delete a tracking rule."""
     try:
         with session_scope() as session:
-            rule = AlertService(session).get(rule_id)
+            rule = AlertService(session, acting_user(session, user).id).get(rule_id)
             label = f"{rule.rule_type.value} on product {rule.product_id}"
     except NotFoundError as exc:
         error(str(exc))
@@ -127,7 +131,7 @@ def alerts_remove(
         typer.confirm(f"Delete alert {rule_id} ({label})?", abort=True)
 
     with session_scope() as session:
-        AlertService(session).remove(rule_id)
+        AlertService(session, acting_user(session, user).id).remove(rule_id)
     success(f"removed alert {rule_id}")
 
 
@@ -135,6 +139,7 @@ def alerts_remove(
 def alerts_history(
     product_id: Annotated[int, typer.Argument(help="Product ID.")],
     limit: Annotated[int, typer.Option("--limit", min=1, max=200)] = 20,
+    user: UserOption = None,
 ) -> None:
     """Show notifications generated for a product."""
     with session_scope() as session:
@@ -164,22 +169,29 @@ def alerts_history(
     stdout.print(listing)
 
 
-def pause(product_id: Annotated[int, typer.Argument(help="Product ID.")]) -> None:
+def pause(
+    product_id: Annotated[int, typer.Argument(help="Product ID.")],
+    user: UserOption = None,
+) -> None:
     """Stop scheduled checks for a product. History and alerts are kept."""
-    _set_status(product_id, TrackingStatus.PAUSED)
+    _set_status(product_id, TrackingStatus.PAUSED, user)
     success(f"paused product {product_id} (manual checks still work)")
 
 
-def resume(product_id: Annotated[int, typer.Argument(help="Product ID.")]) -> None:
+def resume(
+    product_id: Annotated[int, typer.Argument(help="Product ID.")],
+    user: UserOption = None,
+) -> None:
     """Resume scheduled checks for a product."""
-    _set_status(product_id, TrackingStatus.ACTIVE)
+    _set_status(product_id, TrackingStatus.ACTIVE, user)
     success(f"resumed product {product_id}")
 
 
-def _set_status(product_id: int, status: TrackingStatus) -> None:
+def _set_status(product_id: int, status: TrackingStatus, user: str | None = None) -> None:
     try:
         with session_scope() as session:
-            AlertService(session).set_tracking_status(product_id, status)
+            service = AlertService(session, acting_user(session, user).id)
+            service.set_tracking_status(product_id, status)
     except NotFoundError as exc:
         error(str(exc))
         raise typer.Exit(ExitCode.NOT_FOUND) from exc

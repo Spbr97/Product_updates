@@ -17,6 +17,7 @@ Three deliberate properties:
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 
 from .config import Settings
@@ -65,3 +66,30 @@ def requires_key_for_reads(settings: Settings) -> bool:
     deliberate convenience, not an oversight -- and it is switchable.
     """
     return is_auth_enabled(settings) and not settings.api_allow_anonymous_reads
+
+
+#: Prefix on generated keys. Makes one recognisable in a log or a config file, and makes
+#: leaked-secret scanners able to spot it.
+API_KEY_PREFIX = "pt_"
+
+#: 32 bytes of entropy. Long enough that guessing is not a threat model.
+_KEY_BYTES = 32
+
+
+def generate_api_key() -> str:
+    """A fresh key. Shown to its owner once and never recoverable afterwards."""
+    return f"{API_KEY_PREFIX}{secrets.token_urlsafe(_KEY_BYTES)}"
+
+
+def hash_api_key(key: str) -> str:
+    """The value stored for a key.
+
+    A plain SHA-256, deliberately, not bcrypt or argon2. Those exist to make *guessing*
+    expensive, which matters for passwords because people choose weak ones. An API key here
+    is 256 bits from ``secrets``, so there is nothing to guess and a slow hash would only
+    add latency to every single authenticated request.
+
+    What this does buy is that a database dump, a backup, or a support query contains no
+    usable credential.
+    """
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()

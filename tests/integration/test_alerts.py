@@ -86,8 +86,8 @@ def service(db_session: Session) -> ProductService:
 
 
 @pytest.fixture
-def alerts(db_session: Session) -> AlertService:
-    return AlertService(db_session)
+def alerts(db_session: Session, owner_id: int) -> AlertService:
+    return AlertService(db_session, owner_id)
 
 
 @pytest.fixture

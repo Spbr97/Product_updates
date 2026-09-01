@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query, status
 
 from ...domain.enums import TrackingStatus
 from ...services.alert_service import AlertService
-from ..deps import DbSession, PageParams, RequireWrite
+from ..deps import CurrentReader, CurrentUser, DbSession, PageParams, RequireWrite
 from ..schemas.alerts import AlertCreate, AlertResponse
 from ..schemas.common import ErrorResponse, Page
 from ..schemas.products import ProductResponse
@@ -32,8 +32,10 @@ _NOT_FOUND: dict[int | str, dict[str, Any]] = {
         422: {"model": ErrorResponse, "description": "Invalid rule parameters."},
     },
 )
-def create_alert(payload: AlertCreate, session: DbSession) -> AlertResponse:
-    rule = AlertService(session).add(
+def create_alert(
+    payload: AlertCreate, session: DbSession, user: CurrentUser
+) -> AlertResponse:
+    rule = AlertService(session, user.id).add(
         payload.product_id,
         payload.rule_type,
         params=payload.params_dict(),
@@ -47,10 +49,11 @@ def create_alert(payload: AlertCreate, session: DbSession) -> AlertResponse:
 @router.get("/alerts", response_model=Page[AlertResponse], summary="List tracking rules")
 def list_alerts(
     session: DbSession,
+    user: CurrentReader,
     page: PageParams,
     product_id: Annotated[int | None, Query(description="Filter to one product.")] = None,
 ) -> Page[AlertResponse]:
-    result = AlertService(session).list(
+    result = AlertService(session, user.id).list(
         product_id=product_id, limit=page.limit, offset=page.offset
     )
     return Page[AlertResponse](
@@ -67,8 +70,8 @@ def list_alerts(
     summary="Get one tracking rule",
     responses=_NOT_FOUND,
 )
-def get_alert(rule_id: int, session: DbSession) -> AlertResponse:
-    return AlertResponse.model_validate(AlertService(session).get(rule_id))
+def get_alert(rule_id: int, session: DbSession, user: CurrentReader) -> AlertResponse:
+    return AlertResponse.model_validate(AlertService(session, user.id).get(rule_id))
 
 
 @router.delete(
@@ -78,8 +81,8 @@ def get_alert(rule_id: int, session: DbSession) -> AlertResponse:
     dependencies=[RequireWrite],
     responses=_NOT_FOUND,
 )
-def delete_alert(rule_id: int, session: DbSession) -> None:
-    AlertService(session).remove(rule_id)
+def delete_alert(rule_id: int, session: DbSession, user: CurrentUser) -> None:
+    AlertService(session, user.id).remove(rule_id)
 
 
 @router.post(
@@ -89,12 +92,14 @@ def delete_alert(rule_id: int, session: DbSession) -> None:
     dependencies=[RequireWrite],
     responses=_NOT_FOUND,
 )
-def pause_product(product_id: int, session: DbSession) -> ProductResponse:
+def pause_product(
+    product_id: int, session: DbSession, user: CurrentUser
+) -> ProductResponse:
     """The product and its history are kept; only scheduled checks stop.
 
     A manual check still runs, so a paused product can be tested.
     """
-    product = AlertService(session).set_tracking_status(product_id, TrackingStatus.PAUSED)
+    product = AlertService(session, user.id).set_tracking_status(product_id, TrackingStatus.PAUSED)
     return ProductResponse.model_validate(product)
 
 
@@ -105,6 +110,8 @@ def pause_product(product_id: int, session: DbSession) -> ProductResponse:
     dependencies=[RequireWrite],
     responses=_NOT_FOUND,
 )
-def resume_product(product_id: int, session: DbSession) -> ProductResponse:
-    product = AlertService(session).set_tracking_status(product_id, TrackingStatus.ACTIVE)
+def resume_product(
+    product_id: int, session: DbSession, user: CurrentUser
+) -> ProductResponse:
+    product = AlertService(session, user.id).set_tracking_status(product_id, TrackingStatus.ACTIVE)
     return ProductResponse.model_validate(product)
