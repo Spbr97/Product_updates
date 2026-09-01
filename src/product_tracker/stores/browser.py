@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from ..core.logging import get_logger
 from ..domain.enums import FetchOutcome
+from ..domain.errors import InvalidURLError, UnsafeURLError
 from ..domain.models import FetchContext
 from ..utils.urls import assert_public_host, host_of
 from .http import FetchFailure, FetchSuccess
@@ -69,6 +70,10 @@ def render(
         return FetchFailure(FetchOutcome.TIMEOUT, f"browser navigation timed out: {_brief(exc)}")
     except PlaywrightError as exc:
         return FetchFailure(FetchOutcome.ERROR, f"browser render failed: {_brief(exc)}")
+    except UnsafeURLError as exc:
+        return FetchFailure(FetchOutcome.ERROR, f"refused for safety: {exc}")
+    except InvalidURLError as exc:
+        return FetchFailure(FetchOutcome.ERROR, str(exc))
 
     if status is not None and status >= 400:
         outcome = (

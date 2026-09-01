@@ -7,9 +7,9 @@ rules, and notifies you through configured providers — on a schedule, in the b
 Built to be extended: adding a store, a notification channel, or an alert condition means
 adding a module, not editing the tracking engine.
 
-> **Status: phases 1–3 of 7 complete.** You can add products by URL, check them, and
-> read full price/availability history with statistics. Alerts and scheduling are next
-> — see [Roadmap](#roadmap).
+> **Status: phases 1–4 of 7 complete.** Add products by URL, check them, read full
+> history with statistics, and get notified when your conditions are met. Scheduling
+> is next — see [Roadmap](#roadmap).
 
 ---
 
@@ -27,8 +27,9 @@ adding a module, not editing the tracking engine.
   row per *transition*. Answers current/lowest/highest/average, when the low occurred, and
   change over time.
 - **Configurable alerts.** Rules ("price dropped", "below ₹69,999", "back in stock") are
-  data, not code branches. Notifications are deduplicated so a retried job cannot alert you
-  twice.
+  rows, not code branches. Six conditions ship; adding one is an evaluator function.
+  Notifications are deduplicated by a unique key in the database, so the same alert reaches
+  you once however many times it is observed or retried.
 - **Runs itself.** A worker process checks products on a per-product interval, retries
   transient failures, throttles requests per store, and records every attempt.
 - **Two interfaces.** A Typer CLI for humans and a versioned FastAPI for a future web or
@@ -193,8 +194,10 @@ uvicorn product_tracker.api.app:get_app --factory --reload
 - `/api/v1/products/{id}/availability` — availability transitions.
 - `/api/v1/products/{id}/stats` — current/lowest/highest/average, when the low occurred,
   and change since the first observation. `null` when nothing has been recorded yet.
+- `/api/v1/alerts` — `POST` to create a rule, `GET` to list (filter by `product_id`).
+- `/api/v1/alerts/{id}` — `GET` one, `DELETE` to remove.
+- `/api/v1/products/{id}/pause` and `/resume` — stop or restart scheduled checks.
 - `/api/v1/stores` — supported stores, from the adapter registry.
-- Alert routes arrive in phase 4.
 
 Every error response uses one envelope:
 
@@ -222,9 +225,17 @@ product-tracker show <ID>
 product-tracker check <ID>
 product-tracker remove <ID> [--yes]
 product-tracker history <ID> [--stats] [--availability] [--limit 20]
+
+product-tracker alerts add <ID> --type price_dropped
+product-tracker alerts add <ID> --type price_below_target --target 69999 [--cooldown 3600]
+product-tracker alerts list [--product <ID>]
+product-tracker alerts remove <RULE_ID> [--yes]
+product-tracker alerts history <ID>
+product-tracker pause <ID>
+product-tracker resume <ID>
 ```
 
-Commands arriving in later phases: `pause`, `resume`, `alerts add|list|remove`, `worker`.
+Commands arriving in later phases: `worker`.
 
 ## 10. Running the scheduler/workers
 
@@ -263,6 +274,26 @@ missing and leave availability `UNKNOWN` — never report out-of-stock because p
 
 Raise `NotificationDeliveryError` on failure; the service records it and retries within
 bounds. Providers never know why a notification exists.
+
+### Alert conditions and deduplication
+
+Six conditions ship: `price_changed`, `price_dropped`, `price_increased`,
+`price_below_target`, `became_available`, `became_unavailable`.
+
+Two deliberate decisions worth knowing:
+
+- **`became_available` requires a known-unavailable previous state.** Coming from
+  `unknown` does not fire it — we never established the product *was* unavailable, so
+  announcing that it came back would be an invention.
+- **`price_below_target` fires on the state, not on crossing.** Setting a target after a
+  drop you missed still alerts you. Repetition is handled by deduplication, not by
+  narrowing the condition.
+
+A notification's identity is `(product, rule, event, signature, UTC date)`, hashed into the
+unique `dedupe_key` column. The signature depends on how the rule fires: change rules key
+on the transition (`100->90`), state rules on the resulting state. So the same alert on one
+day is delivered once, the same transition next week alerts again, and a rule's
+`cooldown_seconds` gives finer control.
 
 ## 13. Adding a new tracking condition
 
@@ -315,6 +346,9 @@ docker build -f docker/Dockerfile `
 | `status` says "no stores registered" | Run `product-tracker stores sync`. |
 | Integration tests all skip | `TEST_DATABASE_URL` is unset. That is intentional, not a failure. |
 | Readiness hangs | Should not happen: `DB_CONNECT_TIMEOUT_SECONDS` (default 5) bounds connection attempts. |
+| An alert fired once and then went quiet | Deduplication. The same alert is delivered once per day; a further price move alerts again. Check `product-tracker alerts history <ID>`. |
+| No alert at all | Is the rule enabled, is it within its cooldown, and is a provider configured? `product-tracker alerts list` and `product-tracker config` show all three. |
+| Notification status is `suppressed` | No configured provider accepted it. Set `NOTIFY_DEFAULT_PROVIDERS` and the channel's own settings. |
 | History has fewer rows than checks | Expected. Only changed prices are appended; every check is in `check_executions`. |
 | Stats say `mixed_currency` | The listing has been priced in more than one currency. Statistics cover the most recent one; averaging across currencies would be meaningless. |
 | A store reports `blocked` | The site served an anti-bot challenge. This is recorded, not worked around. Try a direct product URL, or accept that the store is unreadable. |
@@ -330,7 +364,7 @@ docker build -f docker/Dockerfile `
 | 1 | Foundation: config, database, models, migrations, logging, CLI, API skeleton | **done** |
 | 2 | Store adapter interface, generic + Flipkart adapters, URL validation, manual check | **done** |
 | 3 | Price/availability history, statistics, change detection | **done** |
-| 4 | Tracking rules, notification abstraction, providers, deduplication | next |
-| 5 | Scheduler, background worker, retries, rate limiting | |
+| 4 | Tracking rules, notification abstraction, providers, deduplication | **done** |
+| 5 | Scheduler, background worker, retries, rate limiting | next |
 | 6 | Complete API and CLI surface, auth, pagination | |
 | 7 | Test coverage, Docker polish, docs, security and performance review | |

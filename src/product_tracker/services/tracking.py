@@ -13,7 +13,11 @@ History is appended in the same transaction as the execution row, and every hist
 carries the ``check_execution_id`` that produced it, so any recorded price can be traced
 back to the fetch that saw it.
 
-Rule evaluation and notifications arrive in phase 4; retries and throttling in phase 5.
+After history is recorded, the product's rules are evaluated and any matches become
+notifications. None of that can fail a check: the observation is already stored, and a
+misbehaving rule or an unreachable provider is logged and recorded rather than raised.
+
+Retries and throttling arrive in phase 5.
 """
 
 from __future__ import annotations
@@ -33,16 +37,25 @@ from ..core.logging import (
     get_logger,
 )
 from ..db.models import CheckExecution, Product
-from ..domain.enums import CheckStatus, FetchMethod, FetchOutcome
+from ..domain.enums import Availability, CheckStatus, FetchMethod, FetchOutcome
 from ..domain.errors import NotFoundError
-from ..domain.models import FetchContext, FetchResult
+from ..domain.models import FetchContext, FetchResult, ProductSnapshot, RuleContext
+from ..notifications.base import NotificationProvider
 from ..repositories.availability_history import AvailabilityHistoryRepository
 from ..repositories.executions import truncate_error
 from ..repositories.price_history import PriceHistoryRepository
 from ..repositories.products import ProductRepository
+from ..repositories.rules import TrackingRuleRepository
 from ..stores.registry import StoreRegistry
 from ..utils.urls import host_of, validate_url
-from .change_detection import detect_availability_change, detect_price_change
+from .change_detection import (
+    AvailabilityOutcome,
+    PriceOutcome,
+    detect_availability_change,
+    detect_price_change,
+)
+from .notification_service import NotificationService
+from .rules_engine import evaluate_all
 
 log = get_logger(__name__)
 
@@ -50,9 +63,16 @@ log = get_logger(__name__)
 class TrackingEngine:
     """Runs a check for one product and records the outcome."""
 
-    def __init__(self, registry: StoreRegistry, settings: Settings) -> None:
+    def __init__(
+        self,
+        registry: StoreRegistry,
+        settings: Settings,
+        providers: list[NotificationProvider] | None = None,
+    ) -> None:
         self.registry = registry
         self.settings = settings
+        # Injected in tests; resolved from settings on first use otherwise.
+        self.providers = providers
 
     def fetch_context(self) -> FetchContext:
         return FetchContext(
@@ -223,8 +243,74 @@ class TrackingEngine:
         else:
             product.consecutive_failures += 1
 
+        self._evaluate_rules(
+            session=session,
+            product=product,
+            execution=execution,
+            price_outcome=price_outcome,
+            availability_outcome=availability_outcome,
+            now=finished,
+        )
+
         session.flush()
         return execution
+
+    def _evaluate_rules(
+        self,
+        *,
+        session: Session,
+        product: Product,
+        execution: CheckExecution,
+        price_outcome: PriceOutcome,
+        availability_outcome: AvailabilityOutcome,
+        now: datetime,
+    ) -> None:
+        """Evaluate this product's rules and dispatch any resulting notifications.
+
+        Nothing here can fail a check. A rule that raises, or a provider that will not
+        deliver, is logged and recorded; the observation is already safely stored.
+        """
+        rules_repo = TrackingRuleRepository(session)
+        rules = rules_repo.list_enabled(product.id)
+        execution.rules_evaluated = len(rules)
+        if not rules:
+            return
+
+        context = RuleContext(
+            product=_snapshot(product),
+            previous_price=price_outcome.previous,
+            current_price=price_outcome.current if price_outcome.current is not None
+            else product.current_price,
+            previous_availability=availability_outcome.previous or Availability.UNKNOWN,
+            current_availability=availability_outcome.current,
+            stats=None,
+            observed_at=now,
+        )
+
+        try:
+            matches = evaluate_all(rules, context, now=now)
+        except Exception as exc:
+            log.warning("rule.evaluation_failed", product_id=product.id, exc_info=exc)
+            return
+
+        execution.rules_matched = len(matches)
+        if not matches:
+            return
+
+        notifier = self._notifier(session)
+        report = notifier.dispatch(matches, when=now)
+        execution.notifications_created = report.created
+
+        # Only rules that produced a *new* notification start their cooldown; one that
+        # was deduplicated has not actually alerted anyone.
+        if report.created:
+            fired = {match.rule_id for match in matches}
+            for rule in rules:
+                if rule.id in fired:
+                    rules_repo.mark_fired(rule, now)
+
+    def _notifier(self, session: Session) -> NotificationService:
+        return NotificationService(session, self.settings, providers=self.providers)
 
     def _apply(self, product: Product, result: FetchResult) -> None:
         """Copy a successful reading onto the product row.
@@ -265,3 +351,18 @@ def _status_for(result: FetchResult) -> CheckStatus:
     if result.outcome is FetchOutcome.PRICE_NOT_FOUND:
         return CheckStatus.PARTIAL
     return CheckStatus.FAILED
+
+
+def _snapshot(product: Product) -> ProductSnapshot:
+    """Detach the fields rules may read, so evaluators cannot touch the session."""
+    return ProductSnapshot(
+        id=product.id,
+        url=product.url,
+        store_slug=product.store.slug if product.store else "",
+        name=product.name,
+        current_price=product.current_price,
+        currency=product.currency,
+        availability=product.availability,
+        tracking_status=product.tracking_status,
+        last_checked_at=product.last_checked_at,
+    )

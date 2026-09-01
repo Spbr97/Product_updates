@@ -107,6 +107,15 @@ class Settings(BaseSettings):
 
     # --- Notifications ----------------------------------------------------------
     notify_default_providers: str = "console"
+    notification_timeout_seconds: int = Field(
+        default=10,
+        ge=1,
+        le=120,
+        description=(
+            "Per-provider delivery timeout. Bounded because delivery currently runs "
+            "inside the check's transaction; a hanging provider would hold it open."
+        ),
+    )
 
     smtp_host: str | None = None
     smtp_port: int = Field(default=587, ge=1, le=65_535)

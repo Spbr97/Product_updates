@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import httpx
 import pytest
 import respx
@@ -17,11 +19,21 @@ runner = CliRunner()
 URL = "https://shop.example.com/p/cli-1"
 
 
+@pytest.fixture(autouse=True)
+def _respx_router() -> Iterator[None]:
+    """Activate respx for every test in this module.
+
+    Not ``@respx.mock`` on the class: in respx 0.23 that decorator returns a *function*,
+    so pytest silently stops collecting the class and the tests never run.
+    """
+    with respx.mock:
+        yield
+
+
 def stub_ok(url: str) -> None:
     respx.get(url).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))
 
 
-@respx.mock
 class TestAdd:
     def test_adds_and_checks_in_one_step(self, clean_db: None) -> None:
         stub_ok(URL)
@@ -59,7 +71,6 @@ class TestAdd:
         assert "non-public" in result.stdout + result.stderr
 
 
-@respx.mock
 class TestListShowRemove:
     def test_list_is_helpful_when_empty(self, clean_db: None) -> None:
         result = runner.invoke(app, ["list"])
@@ -110,7 +121,6 @@ class TestListShowRemove:
         assert runner.invoke(app, ["show", "1"]).exit_code == ExitCode.OK
 
 
-@respx.mock
 class TestCheck:
     def test_successful_check_exits_zero(self, clean_db: None) -> None:
         stub_ok(URL)

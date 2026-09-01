@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import httpx
 import pytest
 import respx
@@ -26,13 +28,25 @@ pytestmark = pytest.mark.db
 FLIPKART_URL = "https://www.flipkart.com/apple-iphone-17/p/itm1?pid=MOBABC123"
 
 
+@pytest.fixture(autouse=True)
+def _respx_router() -> Iterator[None]:
+    """Activate respx for every test in this module.
+
+    Not ``@respx.mock`` on the class: in respx 0.23 that decorator returns a *function*,
+    so pytest silently stops collecting the class and the tests never run.
+    """
+    with respx.mock:
+        yield
+
+
 @pytest.fixture
 def service(db_session: Session) -> ProductService:
     return ProductService(db_session, StoreRegistry(), get_settings())
 
 
 @pytest.fixture
-def engine() -> TrackingEngine:
+def engine(db_env: None) -> TrackingEngine:
+    """Depends on db_env so settings are configured whatever order fixtures resolve in."""
     return TrackingEngine(StoreRegistry(), get_settings())
 
 
@@ -139,7 +153,6 @@ class TestGetListRemove:
         assert service.add(FLIPKART_URL) is not None
 
 
-@respx.mock
 class TestCheckProduct:
     """The engine writes an execution row for every check, success or failure."""
 

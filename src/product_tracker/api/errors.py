@@ -8,6 +8,7 @@ but reported to the client as a bare 500 -- internals are never echoed back.
 from __future__ import annotations
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -42,9 +43,16 @@ _ERROR_MAP: tuple[tuple[type[Exception], int, str], ...] = (
 def error_response(
     status_code: int, error_type: str, message: str, detail: dict | None = None
 ) -> JSONResponse:
+    """Build the standard error envelope.
+
+    ``detail`` goes through ``jsonable_encoder`` because pydantic validation errors carry
+    the offending constraint in ``ctx`` -- and a constraint on a Decimal field is a
+    ``Decimal``, which ``json.dumps`` cannot serialise. Encoding it here means no handler
+    can turn a 422 into a 500 by reporting the reason.
+    """
     body: dict[str, object] = {"type": error_type, "message": message}
     if detail is not None:
-        body["detail"] = detail
+        body["detail"] = jsonable_encoder(detail)
     return JSONResponse(status_code=status_code, content={"error": body})
 
 

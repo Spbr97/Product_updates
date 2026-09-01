@@ -22,6 +22,7 @@ import httpx
 
 from ..core.logging import get_logger
 from ..domain.enums import Availability, FetchMethod, FetchOutcome
+from ..domain.errors import InvalidURLError, UnsafeURLError
 from ..domain.models import FetchContext, FetchResult
 from ..utils.urls import assert_public_host, host_of
 
@@ -108,6 +109,12 @@ def fetch(url: str, ctx: FetchContext) -> FetchSuccess | FetchFailure:
         return FetchFailure(FetchOutcome.HTTP_ERROR, f"too many redirects: {_brief(exc)}")
     except httpx.HTTPError as exc:
         return FetchFailure(FetchOutcome.HTTP_ERROR, f"request failed: {_brief(exc)}")
+    except UnsafeURLError as exc:
+        # Refusing to fetch is a result, not a crash: adapters never raise for this.
+        return FetchFailure(FetchOutcome.ERROR, f"refused for safety: {exc}")
+    except InvalidURLError as exc:
+        # Usually a DNS failure, which can recover, so it is classified as transient.
+        return FetchFailure(FetchOutcome.ERROR, str(exc))
 
 
 def _classify_status(response: httpx.Response) -> FetchFailure | None:

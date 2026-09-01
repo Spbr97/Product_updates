@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import httpx
 import pytest
 import respx
@@ -17,6 +19,17 @@ runner = CliRunner()
 URL = "https://shop.example.com/p/cli-history"
 
 
+@pytest.fixture(autouse=True)
+def _respx_router() -> Iterator[None]:
+    """Activate respx for every test in this module.
+
+    Not ``@respx.mock`` on the class: in respx 0.23 that decorator returns a *function*,
+    so pytest silently stops collecting the class and the tests never run.
+    """
+    with respx.mock:
+        yield
+
+
 def add_and_check(html: str | None = None) -> None:
     respx.get(URL).mock(
         return_value=httpx.Response(200, html=html or load("jsonld_in_stock.html"))
@@ -24,7 +37,6 @@ def add_and_check(html: str | None = None) -> None:
     runner.invoke(app, ["add", URL])
 
 
-@respx.mock
 class TestHistory:
     def test_shows_recorded_prices(self, clean_db: None) -> None:
         add_and_check()
@@ -61,7 +73,6 @@ class TestHistory:
         assert "69,999.00" in result.stdout
 
 
-@respx.mock
 class TestStatsFlag:
     def test_reports_statistics(self, clean_db: None) -> None:
         add_and_check()
@@ -95,7 +106,6 @@ class TestStatsFlag:
         assert "no price history yet" in result.stdout + result.stderr
 
 
-@respx.mock
 class TestAvailabilityFlag:
     def test_shows_availability_history(self, clean_db: None) -> None:
         add_and_check()

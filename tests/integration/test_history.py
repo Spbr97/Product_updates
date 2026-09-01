@@ -6,6 +6,7 @@ writes history when it actually learned something.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -29,6 +30,17 @@ from product_tracker.stores.registry import StoreRegistry
 pytestmark = pytest.mark.db
 
 BASE = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _respx_router() -> Iterator[None]:
+    """Activate respx for every test in this module.
+
+    Not ``@respx.mock`` on the class: in respx 0.23 that decorator returns a *function*,
+    so pytest silently stops collecting the class and the tests never run.
+    """
+    with respx.mock:
+        yield
 
 
 @pytest.fixture
@@ -219,7 +231,6 @@ class TestMixedCurrency:
         assert stats.mixed_currency is False
 
 
-@respx.mock
 class TestEngineWritesHistory:
     def _stub(self, url: str, html: str) -> None:
         respx.get(url).mock(return_value=httpx.Response(200, html=html))

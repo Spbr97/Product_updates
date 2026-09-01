@@ -42,6 +42,9 @@ def _isolate_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         monkeypatch.delenv(field_name.upper(), raising=False)
     # Settings reads .env by default; point it somewhere that does not exist.
     monkeypatch.setenv("PRODUCT_TRACKER_TEST_MODE", "1")
+    # Rich wraps tables to the terminal width; the default 80 columns truncates long
+    # values like "price_below_target" and makes output assertions fail spuriously.
+    monkeypatch.setenv("COLUMNS", "200")
     monkeypatch.chdir(PROJECT_ROOT / "tests")
 
     reset_settings_cache()
@@ -60,6 +63,7 @@ def dummy_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOG_FORMAT", "console")
     # Tests that assert on "database is down" should not wait out the production timeout.
     monkeypatch.setenv("DB_CONNECT_TIMEOUT_SECONDS", "2")
+    monkeypatch.setenv("PLAYWRIGHT_ENABLED", "false")
     reset_settings_cache()
 
 
@@ -127,6 +131,10 @@ def db_env(migrated_database: str, monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv("DATABASE_URL", migrated_database)
     monkeypatch.setenv("BLOCK_PRIVATE_ADDRESSES", "false")
+    # Tests must never launch a browser. Playwright may be installed in the environment,
+    # in which case a failed HTTP fetch would fall back to it and spend ~12s trying to
+    # start Chromium. Browser behaviour is covered by stubbing `stores.browser.render`.
+    monkeypatch.setenv("PLAYWRIGHT_ENABLED", "false")
     reset_settings_cache()
     reset_engine_cache()
 

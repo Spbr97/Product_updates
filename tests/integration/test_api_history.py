@@ -17,6 +17,17 @@ pytestmark = pytest.mark.db
 URL = "https://shop.example.com/p/api-history"
 
 
+@pytest.fixture(autouse=True)
+def _respx_router() -> Iterator[None]:
+    """Activate respx for every test in this module.
+
+    Not ``@respx.mock`` on the class: in respx 0.23 that decorator returns a *function*,
+    so pytest silently stops collecting the class and the tests never run.
+    """
+    with respx.mock:
+        yield
+
+
 @pytest.fixture
 def client(clean_db: None) -> Iterator[TestClient]:
     with TestClient(create_app(), raise_server_exceptions=False) as test_client:
@@ -33,7 +44,6 @@ def create_and_check(client: TestClient, url: str = URL, html: str | None = None
     return int(product_id)
 
 
-@respx.mock
 class TestPriceHistory:
     def test_returns_recorded_observations(self, client: TestClient) -> None:
         product_id = create_and_check(client)
@@ -78,7 +88,6 @@ class TestPriceHistory:
         assert body["offset"] == 0
 
 
-@respx.mock
 class TestAvailabilityHistory:
     def test_returns_transitions(self, client: TestClient) -> None:
         product_id = create_and_check(client)
@@ -94,7 +103,6 @@ class TestAvailabilityHistory:
         assert client.get("/api/v1/products/999999/availability").status_code == 404
 
 
-@respx.mock
 class TestStats:
     def test_reports_aggregates(self, client: TestClient) -> None:
         product_id = create_and_check(client)

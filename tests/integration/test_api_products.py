@@ -17,6 +17,17 @@ pytestmark = pytest.mark.db
 PRODUCT_URL = "https://shop.example.com/p/api-1"
 
 
+@pytest.fixture(autouse=True)
+def _respx_router() -> Iterator[None]:
+    """Activate respx for every test in this module.
+
+    Not ``@respx.mock`` on the class: in respx 0.23 that decorator returns a *function*,
+    so pytest silently stops collecting the class and the tests never run.
+    """
+    with respx.mock:
+        yield
+
+
 @pytest.fixture
 def client(clean_db: None) -> Iterator[TestClient]:
     with TestClient(create_app(), raise_server_exceptions=False) as test_client:
@@ -132,7 +143,6 @@ class TestDelete:
         assert client.delete("/api/v1/products/999999").status_code == 404
 
 
-@respx.mock
 class TestCheck:
     def test_check_returns_the_execution(self, client: TestClient) -> None:
         stub_ok(PRODUCT_URL)

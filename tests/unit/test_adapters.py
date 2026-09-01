@@ -6,6 +6,7 @@ on Flipkart or anyone else being reachable.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
 
@@ -22,8 +23,21 @@ from product_tracker.stores.registry import StoreRegistry
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
-#: Browser fallback off: these tests exercise the HTTP path, and Playwright is optional.
-CTX = FetchContext(timeout_seconds=5, allow_browser=False)
+#: Browser fallback off (these exercise the HTTP path, and Playwright is optional), and
+#: host verification off: the stubbed hostnames deliberately do not resolve. The guard
+#: itself is covered in test_urls.py and by the dedicated cases below.
+CTX = FetchContext(timeout_seconds=5, allow_browser=False, verify_public_host=False)
+
+
+@pytest.fixture(autouse=True)
+def _respx_router() -> Iterator[None]:
+    """Activate respx for every test in this module.
+
+    Not ``@respx.mock`` on the class: in respx 0.23 that decorator returns a *function*,
+    so pytest silently stops collecting the class and the tests never run.
+    """
+    with respx.mock:
+        yield
 
 
 def load(name: str) -> str:
@@ -74,7 +88,6 @@ class TestRegistryResolution:
         assert slugs == {"flipkart", "generic"}
 
 
-@respx.mock
 class TestGenericAdapterSuccess:
     def test_reads_json_ld_product(self, generic: GenericStoreAdapter) -> None:
         stub("https://shop.test/p/1", html=load("jsonld_in_stock.html"))
@@ -119,7 +132,6 @@ class TestGenericAdapterSuccess:
         assert result.availability is Availability.UNKNOWN
 
 
-@respx.mock
 class TestGenericAdapterFailures:
     """The central rule: no failure may be reported as OUT_OF_STOCK."""
 
@@ -205,7 +217,6 @@ class TestGenericAdapterFailures:
         assert "SUPERSECRET" not in (result.message or "")
 
 
-@respx.mock
 class TestFlipkartAdapter:
     def test_reads_price_from_selectors(self, flipkart: FlipkartAdapter) -> None:
         url = "https://www.flipkart.com/apple-iphone-17/p/itm1?pid=MOBABC123"
@@ -268,7 +279,6 @@ class TestFlipkartAdapter:
         assert result.price == Decimal("69999.00")
 
 
-@respx.mock
 class TestConvenienceAccessors:
     def test_get_price_and_availability(self, generic: GenericStoreAdapter) -> None:
         stub("https://shop.test/p/20", html=load("jsonld_in_stock.html"))
