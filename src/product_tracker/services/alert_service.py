@@ -20,6 +20,7 @@ from ..repositories.products import ProductRepository
 from ..repositories.rules import TrackingRuleRepository
 from ..repositories.users import SubscriptionRepository
 from .rules_engine import RULE_EVALUATORS, validate_params
+from .user_service import assert_subscribed
 
 log = get_logger(__name__)
 
@@ -60,6 +61,9 @@ class AlertService:
         product = self.products.get(product_id)
         if product is None:
             raise NotFoundError("Product", product_id)
+        # On something you watch. Otherwise a rule is a way to learn another user's prices
+        # by having the system tell you when they move.
+        assert_subscribed(self.session, self.user_id, product_id)
 
         if rule_type not in RULE_EVALUATORS:
             raise ValidationError(f"no evaluator is registered for rule type {rule_type.value}")

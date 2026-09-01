@@ -11,7 +11,8 @@ from typing import Any
 from fastapi import APIRouter
 
 from ...services.history_service import HistoryService
-from ..deps import DbSession, PageParams
+from ...services.user_service import assert_subscribed
+from ..deps import CurrentReader, DbSession, PageParams
 from ..schemas.common import ErrorResponse, Page
 from ..schemas.history import (
     AvailabilityHistoryEntry,
@@ -33,10 +34,11 @@ _NOT_FOUND: dict[int | str, dict[str, Any]] = {
     responses=_NOT_FOUND,
 )
 def price_history(
-    product_id: int, session: DbSession, page: PageParams
+    product_id: int, session: DbSession, page: PageParams, user: CurrentReader
 ) -> Page[PriceHistoryEntry]:
     """Newest first. Only meaningful observations are stored, so consecutive identical
     prices do not appear twice -- see ``/checks`` semantics in the README."""
+    assert_subscribed(session, user.id, product_id)
     result = HistoryService(session).price_history(
         product_id, limit=page.limit, offset=page.offset
     )
@@ -55,9 +57,10 @@ def price_history(
     responses=_NOT_FOUND,
 )
 def availability_history(
-    product_id: int, session: DbSession, page: PageParams
+    product_id: int, session: DbSession, page: PageParams, user: CurrentReader
 ) -> Page[AvailabilityHistoryEntry]:
     """One row per transition, not per check."""
+    assert_subscribed(session, user.id, product_id)
     result = HistoryService(session).availability_history(
         product_id, limit=page.limit, offset=page.offset
     )
@@ -75,11 +78,14 @@ def availability_history(
     summary="Price statistics",
     responses=_NOT_FOUND,
 )
-def price_stats(product_id: int, session: DbSession) -> PriceStatsResponse | None:
+def price_stats(
+    product_id: int, session: DbSession, user: CurrentReader
+) -> PriceStatsResponse | None:
     """Returns ``null`` when the product has no recorded prices yet.
 
     A product that exists but has never been checked successfully is not an error; the
     caller distinguishes "no data" from "no product" by the 404.
     """
+    assert_subscribed(session, user.id, product_id)
     stats = HistoryService(session).stats(product_id)
     return PriceStatsResponse.model_validate(stats) if stats else None

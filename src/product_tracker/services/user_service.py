@@ -178,6 +178,18 @@ def subscribe(session: Session, user_id: int, product_id: int) -> Subscription:
     return repo.add(Subscription(user_id=user_id, product_id=product_id))
 
 
+def assert_subscribed(session: Session, user_id: int, product_id: int) -> None:
+    """Refuse a listing this user does not watch, as though it did not exist.
+
+    Product ids are sequential, so without this an authenticated user can walk 1, 2, 3...
+    and read every URL, price and history row anyone else is tracking. NotFoundError rather
+    than a permission error, for the same reason groups use it: a 403 confirms the id is
+    real and turns the walk into an enumeration oracle.
+    """
+    if not SubscriptionRepository(session).is_subscribed(user_id, product_id):
+        raise NotFoundError("Product", product_id)
+
+
 def unsubscribe(session: Session, user_id: int, product_id: int) -> bool:
     """Stop watching a listing. Returns whether there was anything to remove.
 

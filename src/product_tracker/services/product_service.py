@@ -22,7 +22,7 @@ from ..repositories.users import SubscriptionRepository
 from ..stores.catalogue import resolve_store
 from ..stores.registry import StoreRegistry
 from ..utils.urls import canonicalize_url, host_of, validate_url
-from .user_service import default_user, unsubscribe
+from .user_service import assert_subscribed, default_user, unsubscribe
 
 log = get_logger(__name__)
 
@@ -130,9 +130,17 @@ class ProductService:
         return store
 
     def get(self, product_id: int) -> Product:
+        """One listing, if this user watches it.
+
+        Scoped whenever the service was built for a user. Internal callers -- the tracking
+        engine, the scheduler -- construct it without one and go through the repository
+        directly, because a check runs on behalf of every subscriber at once.
+        """
         product = self.products.get(product_id)
         if product is None:
             raise NotFoundError("Product", product_id)
+        if self.user_id is not None:
+            assert_subscribed(self.session, self.user_id, product_id)
         return product
 
     def remove(self, product_id: int) -> None:

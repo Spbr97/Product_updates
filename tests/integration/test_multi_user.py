@@ -557,3 +557,60 @@ class TestSubscriptionBookkeeping:
 
         assert db_session.get(Product, product_id) is not None
         assert SubscriptionRepository(db_session).subscriber_count(product_id) == 1
+
+
+class TestOneUserCannotReadAnothersListings:
+    """Product ids are sequential, which makes them walkable.
+
+    Groups and alerts were scoped from the start; listings and their history were not, and
+    an authenticated user could read every URL and price anyone else tracked by counting
+    upwards from 1.
+    """
+
+    def test_a_listing_you_do_not_watch_is_not_found(
+        self, db_session: Session, alice: int, bob: int
+    ) -> None:
+        product = track(db_session, alice)
+
+        with pytest.raises(NotFoundError):
+            service(db_session, bob).get(product.id)
+
+    def test_the_owner_can_still_read_it(self, db_session: Session, alice: int) -> None:
+        product = track(db_session, alice)
+        assert service(db_session, alice).get(product.id).id == product.id
+
+    def test_a_shared_listing_is_readable_by_both(
+        self, db_session: Session, alice: int, bob: int
+    ) -> None:
+        """Scoping is by subscription, not by who added it first."""
+        product = track(db_session, alice)
+        track(db_session, bob)
+
+        assert service(db_session, bob).get(product.id).id == product.id
+
+    def test_removing_someone_elses_listing_is_not_found(
+        self, db_session: Session, alice: int, bob: int
+    ) -> None:
+        product = track(db_session, alice)
+
+        with pytest.raises(NotFoundError):
+            service(db_session, bob).remove(product.id)
+        assert db_session.get(Product, product.id) is not None
+
+    def test_an_alert_cannot_be_set_on_a_listing_you_do_not_watch(
+        self, db_session: Session, alice: int, bob: int
+    ) -> None:
+        """Otherwise an alert is a way to learn another user's prices: subscribe to
+        nothing, rule on everything, and let the system report their movements."""
+        product = track(db_session, alice)
+
+        with pytest.raises(NotFoundError):
+            AlertService(db_session, bob).add(product.id, RuleType.PRICE_DROPPED)
+
+    def test_internal_callers_are_not_scoped(self, db_session: Session, alice: int) -> None:
+        """A check runs on behalf of every subscriber at once, so the engine must still
+        reach any listing. It builds the service without a user for exactly that reason."""
+        product = track(db_session, alice)
+        unscoped = ProductService(db_session, default_registry(), get_settings())
+
+        assert unscoped.get(product.id).id == product.id
