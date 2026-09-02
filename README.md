@@ -36,6 +36,9 @@ adding a module, not editing the tracking engine.
   transactions, so a slow provider never holds a check open.
 - **Runs itself.** A worker process checks products on a per-product interval, retries
   transient failures, throttles requests per store, and records every attempt.
+- **Find by name.** `product-tracker search "Galaxy S25"` (or `POST /api/v1/search`) asks
+  every shop at once and returns ranked candidates, so nobody has to paste six links.
+  Search is for **one named product**, not a category — see below.
 - **Two interfaces.** A Typer CLI for humans and a versioned FastAPI for a future web or
   mobile frontend.
 
@@ -66,6 +69,38 @@ Notes on the two that are not a plain ✅:
   and the browser fallback does not help. Getting past it would require IP rotation or
   fingerprint spoofing; this project does not do that. Croma is recorded as `blocked` and
   its circuit breaker backs it off.
+
+### Finding a product
+
+Each shop is reached by whichever route it permits. Three exist, in increasing cost, and a
+search tries them in order until one answers:
+
+1. **Their search page** — fastest, and carries prices. Only where robots.txt allows it.
+2. **Their catalogue (sitemap)** — a static file they publish for crawlers. Carries URLs
+   but no prices, so the best few hits get their product page fetched to fill them in
+   (`SEARCH_PRICE_LOOKUPS`, default 5).
+3. **Their browse listings** — category and brand pages they publish. Code is in place;
+   not yet enabled (see `stores/searches/flipkart.yaml` for exactly what remains).
+
+Where each shop stands, verified 2026-09-02:
+
+| Shop | Finding by name | Tracking a pasted link |
+|---|---|---|
+| Amazon India | ✅ their search | ✅ |
+| Reliance Digital | ✅ catalogue, prices filled in | ✅ |
+| Vijay Sales | ✅ catalogue, prices filled in | ✅ |
+| Samsung | ✅ catalogue, prices filled in — current models only | ✅ |
+| Flipkart | ❌ search disallowed; catalogue is ~275M URLs | ✅ |
+| BigBasket | ❌ search disallowed, publishes no catalogue | ✅ |
+| Croma | ❌ blocks us (HTTP 403) | ❌ |
+| Sangeetha | ❌ stopped answering | ⚠️ intermittent |
+
+**Search only accepts a named product.** "Galaxy S25" works; "phone", "earbuds" and
+"best power bank" are refused with a message saying why. This is not fussiness: a shop's
+catalogue and browse pages are ordered by the shop, not by relevance to a question we
+asked, so a category query can only return whatever they happen to feature. Measured —
+on Flipkart's Samsung phone listing the Galaxy S25 was not on page one; it was on page
+two, behind older models. To track something you found by browsing, paste its link.
 
 ## 2. Architecture
 
@@ -173,6 +208,9 @@ most:
 | `HTTP_TIMEOUT_SECONDS` / `HTTP_MAX_RETRIES` | `25` / `3` | Outbound request bounds. |
 | `STORE_MIN_INTERVAL_SECONDS` / `FETCH_JITTER_SECONDS` | `5` / `3` | Politeness: minimum gap between requests to one store, plus random jitter. |
 | `PLAYWRIGHT_ENABLED` | `true` | Set `false` to run without a browser. |
+| `SEARCH_PRICE_LOOKUPS` | `5` | Search hits from a catalogue carry no price; this many get their product page fetched so the result is comparable. `0` switches it off. |
+| `SHARED_PACING` / `STORE_MAX_WAIT_SECONDS` | `true` / `20` | Pace requests across processes, so two people searching at once are not two independent rate limiters. |
+| `MAX_LISTINGS_PER_USER` | `200` | Per-account ceiling. Also `MAX_GROUPS_PER_USER`, `MAX_ALERTS_PER_USER`. |
 | `API_KEY` | *(unset)* | If set, required as `X-API-Key` on mutating endpoints. Unset means the API is open — fine on localhost, not in public. |
 | `API_ALLOW_ANONYMOUS_READS` | `true` | Set `false` to require the key on `GET` too. |
 | `API_MAX_REQUEST_BYTES` | `64000` | Bodies over this are rejected with 413. |
@@ -276,23 +314,41 @@ Exit codes: `0` success · `1` unexpected error · `2` not found · `3` store fa
 `4` configuration error.
 
 ```powershell
+# Find, then track
+product-tracker search "Galaxy S25" [--limit 5] [--store amazon-in] [--no-browser]
+product-tracker track "Galaxy S25" [--auto]        # search, confirm, then track
 product-tracker add <URL> [--interval 3600] [--no-check]
+
+# Watchlist
 product-tracker list [--store flipkart] [--status active] [--limit 20]
 product-tracker show <ID>
 product-tracker check <ID>
+product-tracker set-interval <ID> 3600             # keeps the price history
 product-tracker remove <ID> [--yes]
 product-tracker history <ID> [--stats] [--availability] [--limit 20]
+product-tracker pause <ID> / resume <ID>
 
+# Comparing one product across shops and models
+product-tracker groups add "Galaxy S25" [--category phone]
+product-tracker groups list
+product-tracker compare <GROUP-SLUG> [--layout grid|list|auto]
+
+# Alerts
 product-tracker alerts add <ID> --type price_dropped
 product-tracker alerts add <ID> --type price_below_target --target 69999 [--cooldown 3600]
+product-tracker alerts set-cooldown <RULE_ID> 3600
 product-tracker alerts list [--product <ID>]
 product-tracker alerts remove <RULE_ID> [--yes]
 product-tracker alerts history <ID>
-product-tracker pause <ID>
-product-tracker resume <ID>
 
+# Accounts (every command takes --user to act as one)
+product-tracker users add alice@example.com --name Alice
+product-tracker users list / rotate-key <EMAIL> / set-active <EMAIL> / remove <EMAIL>
+
+# Background
 product-tracker worker [--dry-run]
 product-tracker check-all [--limit 100]
+product-tracker status / config / stores list
 ```
 
 ## 10. Running the scheduler/workers
