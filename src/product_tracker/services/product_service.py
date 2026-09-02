@@ -15,7 +15,12 @@ from ..core.config import Settings
 from ..core.logging import get_logger
 from ..db.models import Product, Store, Subscription
 from ..domain.enums import TrackingStatus
-from ..domain.errors import DuplicateError, NotFoundError, QuotaExceededError
+from ..domain.errors import (
+    DuplicateError,
+    NotFoundError,
+    QuotaExceededError,
+    ValidationError,
+)
 from ..repositories.products import ProductRepository
 from ..repositories.stores import StoreRepository
 from ..repositories.users import SubscriptionRepository
@@ -30,6 +35,10 @@ from .user_service import (
 )
 
 log = get_logger(__name__)
+
+#: Mirrors the database's check constraint. A floor towards the shops, not a limit on
+#: the user -- sixty seconds is already far more often than any price actually moves.
+MINIMUM_INTERVAL_SECONDS = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +179,26 @@ class ProductService:
             raise NotFoundError("Product", product_id)
         if self.user_id is not None:
             assert_subscribed(self.session, self.user_id, product_id)
+        return product
+
+    def set_check_interval(self, product_id: int, seconds: int | None) -> Product:
+        """How often this listing is checked. ``None`` returns it to the global default.
+
+        Changing it needed a remove-and-re-add before, which destroyed the listing's price
+        history -- a punishing price for saying "check this hourly instead of daily".
+
+        The worker picks the change up on its next reconcile rather than needing a restart:
+        ``desired_schedule`` reads this column every pass.
+        """
+        product = self.get(product_id)
+        if seconds is not None and seconds < MINIMUM_INTERVAL_SECONDS:
+            raise ValidationError(
+                f"a check interval below {MINIMUM_INTERVAL_SECONDS}s is not allowed: "
+                "it is a politeness floor towards the shops, not a limitation"
+            )
+        product.check_interval_seconds = seconds
+        self.session.flush()
+        log.info("product.interval_changed", product_id=product_id, seconds=seconds)
         return product
 
     def remove(self, product_id: int) -> None:

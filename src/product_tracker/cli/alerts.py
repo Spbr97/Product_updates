@@ -112,6 +112,34 @@ def alerts_list(
     stdout.print(listing)
 
 
+@alerts_app.command("set-cooldown")
+def alerts_set_cooldown(
+    rule_id: Annotated[int, typer.Argument(help="Alert rule ID.")],
+    seconds: Annotated[
+        int | None,
+        typer.Argument(help="Minimum seconds between firings. Omit to remove the gap."),
+    ] = None,
+    user: UserOption = None,
+) -> None:
+    """Change how often an alert may fire, without recreating it."""
+    try:
+        with session_scope() as session:
+            service = AlertService(session, acting_user(session, user).id)
+            rule = service.set_cooldown(rule_id, seconds)
+            gap = rule.cooldown_seconds
+    except NotFoundError as exc:
+        error(str(exc))
+        raise typer.Exit(ExitCode.NOT_FOUND) from exc
+    except ValidationError as exc:
+        error(str(exc))
+        raise typer.Exit(ExitCode.ERROR) from exc
+
+    if gap is None:
+        success(f"alert {rule_id} may now fire whenever its condition is met")
+    else:
+        success(f"alert {rule_id} will fire at most once every {gap}s")
+
+
 @alerts_app.command("remove")
 def alerts_remove(
     rule_id: Annotated[int, typer.Argument(help="Alert ID.")],

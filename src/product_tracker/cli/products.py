@@ -174,6 +174,35 @@ def remove(
     success(f"removed product {product_id}")
 
 
+def set_interval(
+    product_id: Annotated[int, typer.Argument(help="Product ID.")],
+    seconds: Annotated[
+        int | None,
+        typer.Argument(
+            help="Seconds between checks. Omit to fall back to the global default."
+        ),
+    ] = None,
+    user: UserOption = None,
+) -> None:
+    """Change how often a product is checked, without losing its history."""
+    try:
+        with session_scope() as session:
+            product = _service(session, user).set_check_interval(product_id, seconds)
+            effective = product.check_interval_seconds
+    except NotFoundError as exc:
+        error(str(exc))
+        raise typer.Exit(ExitCode.NOT_FOUND) from exc
+    except ValidationError as exc:
+        error(str(exc))
+        raise typer.Exit(ExitCode.ERROR) from exc
+
+    if effective is None:
+        success(f"product {product_id} now uses the global check interval")
+    else:
+        success(f"product {product_id} will be checked every {effective}s")
+    info("A running worker applies this on its next reconcile; no restart needed.")
+
+
 def check(product_id: Annotated[int, typer.Argument(help="Product ID.")]) -> None:
     """Check one product now and report what was found."""
     try:

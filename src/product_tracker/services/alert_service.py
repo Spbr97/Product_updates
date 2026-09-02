@@ -146,6 +146,20 @@ class AlertService:
         self.session.flush()
         return rule
 
+    def set_cooldown(self, rule_id: int, seconds: int | None) -> TrackingRule:
+        """The shortest gap between two firings of this rule. ``None`` removes the gap.
+
+        Previously fixed at creation, so changing your mind about how often you wanted to
+        hear from an alert meant deleting it and starting again.
+        """
+        if seconds is not None and seconds < 0:
+            raise ValidationError("a cooldown cannot be negative")
+        rule = self.get(rule_id)
+        rule.cooldown_seconds = seconds
+        self.session.flush()
+        log.info("rule.cooldown_changed", rule_id=rule_id, seconds=seconds)
+        return rule
+
     # --- Product tracking status --------------------------------------------------
 
     def set_tracking_status(self, product_id: int, status: TrackingStatus) -> Product:

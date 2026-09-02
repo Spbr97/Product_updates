@@ -34,6 +34,7 @@ app.command("list")(products.list_products)
 app.command("show")(products.show)
 app.command("remove")(products.remove)
 app.command("check")(products.check)
+app.command("set-interval")(products.set_interval)
 app.command("history")(history.history)
 
 app.add_typer(groups.groups_app, name="groups")
