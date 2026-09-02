@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}{{ entry.canonical_name }} &middot; Product Tracker{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ entry.canonical_name }}</h1>
+    <p class="lede">
+      Entry #{{ entry.id }}
+      {% if entry.status.value == 'archived' %}
+        &middot; <span class="badge muted">Archived</span>
+      {% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    <a class="button ghost" href="/ui/products/{{ entry.id }}/edit">Edit</a>
+    {% if paused %}
+    <form method="post" action="/ui/products/{{ entry.id }}/resume" class="inline">
+      <button class="button" type="submit">Resume</button>
+    </form>
+    {% else %}
+    <form method="post" action="/ui/products/{{ entry.id }}/pause" class="inline">
+      <button class="button" type="submit">Pause</button>
+    </form>
+    {% endif %}
+    <form method="post" action="/ui/products/{{ entry.id }}/check" class="inline">
+      <button class="button primary" type="submit">Check now</button>
+    </form>
+  </div>
+</div>
+
+{% if notice %}<div class="notice" role="status">{{ notice }}</div>{% endif %}
+
+<section class="panels">
+  {% for listing in listings %}
+    {% include "_retailer_panel.html" with context %}
+  {% endfor %}
+</section>
+
+<section>
+  <h2>Price comparison</h2>
+  {% if comparable %}
+  <table class="compare">
+    <thead>
+      <tr>
+        <th scope="col"></th>
+        {% for listing in active_listings %}<th scope="col">{{ listing.store_name }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th scope="row">Current price</th>
+        {% for listing in active_listings %}
+        <td class="{{ 'best' if listing.id == cheapest_id else '' }}">{{ listing.price_text }}</td>
+        {% endfor %}
+      </tr>
+      <tr>
+        <th scope="row">Availability</th>
+        {% for listing in active_listings %}
+        <td class="{{ listing.view.tone }}">{{ listing.view.label }}</td>
+        {% endfor %}
+      </tr>
+      <tr>
+        <th scope="row">Last checked</th>
+        {% for listing in active_listings %}<td>{{ listing.last_checked or 'never' }}</td>{% endfor %}
+      </tr>
+    </tbody>
+  </table>
+  {% if mixed_currency %}
+  <p class="hint">
+    These shops quote different currencies, so no cheapest is marked. Converting them
+    would invent a rate we do not have.
+  </p>
+  {% endif %}
+  {% else %}
+  <p class="hint">
+    A comparison needs a price from more than one shop. As soon as two have been read,
+    this fills in.
+  </p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Recent prices</h2>
+  {% for section in history %}
+  <h3>{{ section.store_name }}</h3>
+  {% if section.rows %}
+  <table class="history">
+    <thead><tr><th scope="col">When</th><th scope="col">Price</th></tr></thead>
+    <tbody>
+      {% for row in section.rows %}
+      <tr><td>{{ row.when }}</td><td>{{ row.price }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="hint">
+    Nothing recorded yet. Only meaningful changes are stored, so a price that has not
+    moved appears once.
+  </p>
+  {% endif %}
+  {% endfor %}
+  <p class="hint">
+    Each shop&rsquo;s history is its own. They are never interleaved &mdash; that would
+    produce a price series no single listing ever had.
+  </p>
+</section>
+
+<section class="danger">
+  <h2>Stop tracking</h2>
+  <p class="hint">
+    Archiving stops scheduled checks and keeps every observation. Nothing is deleted.
+  </p>
+  <form method="post" action="/ui/products/{{ entry.id }}/archive" class="inline">
+    <button class="button danger" type="submit"
+            onclick="return confirm('Archive this product? Its history is kept.')">
+      Archive product
+    </button>
+  </form>
+</section>
+{% endblock %}

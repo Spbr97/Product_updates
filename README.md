@@ -36,6 +36,10 @@ adding a module, not editing the tracking engine.
   transactions, so a slow provider never holds a check open.
 - **Runs itself.** A worker process checks products on a per-product interval, retries
   transient failures, throttles requests per store, and records every attempt.
+- **One product, both shops.** A *Product Entry* is the thing you actually mean by "the
+  Galaxy S25 I'm watching": one logical product owning one Amazon listing and one Flipkart
+  listing. Each shop is tracked, priced and failed independently; the entry keeps its id
+  through price changes, renames and URL swaps. There is a web form for it at `/ui`.
 - **Find by name.** `product-tracker search "Galaxy S25"` (or `POST /api/v1/search`) asks
   every shop at once and returns ranked candidates, so nobody has to paste six links.
   Search is for **one named product**, not a category — see below.
@@ -106,6 +110,31 @@ catalogue and browse pages are ordered by the shop, not by relevance to a questi
 asked, so a category query can only return whatever they happen to feature. Measured —
 on Flipkart's Samsung phone listing the Galaxy S25 was not on page one; it was on page
 two, behind older models. To track something you found by browsing, paste its link.
+
+### Product Entries, and how they differ from groups
+
+A **Product Entry** is one product with one listing per retailer:
+
+```
+Product Entry #42  "Samsung Galaxy S25 256GB"
+  +-- Amazon listing   -> its own price, availability, history, checks
+  +-- Flipkart listing -> its own price, availability, history, checks
+```
+
+The rule the whole feature exists to protect: **a price change never creates a new
+product.** Entry #42 stays #42 while prices move, while you rename it, and while you point
+a shop at a different URL. Observations belong to the listing that saw them, so replacing
+a URL keeps the old prices attached to the old page rather than rewriting them as though
+they came from the new one.
+
+Related but distinct from **product groups**, which compare one product across *models and
+colours* (`groups`, `compare`). An entry is one product; a group organises many. Both work,
+and neither replaces the other.
+
+Removing a shop deactivates its listing: the entry and the other shop are untouched, and
+the removed shop's months of observations stay readable. Archiving an entry does the same
+for all of it. Nothing is deleted, because "I stopped following this" is a different fact
+from "this never happened".
 
 ## 2. Architecture
 
@@ -273,6 +302,21 @@ uvicorn product_tracker.api.app:get_app --factory --reload
 - `/api/v1/alerts/{id}` — `GET` one, `DELETE` to remove.
 - `/api/v1/products/{id}/pause` and `/resume` — stop or restart scheduled checks.
 - `/api/v1/stores` — supported stores, from the adapter registry.
+- `/api/v1/product-entries` — `POST` to create one entry with its Amazon and Flipkart
+  listings in a single transaction, `GET` to list (paginated, filter by `status`). The
+  Amazon field refuses a Flipkart link and vice versa; a URL already live in one of your
+  entries is a **409 naming the entry it clashes with**.
+- `/api/v1/product-entries/{id}` — `GET` one (per-retailer current state), `PATCH` to
+  rename, `DELETE` to archive. Renaming and re-pointing preserve the id.
+- `/api/v1/product-entries/{id}/check` — `POST` to check every shop now. Reports each
+  retailer **separately** and returns 200 even when all of them failed: a recorded failure
+  is a successfully observed fact.
+- `/api/v1/product-entries/{id}/history` and `/stats` — one section per retailer, never
+  merged. Two shops' observations are two series; interleaving them would produce a price
+  history no listing ever had.
+- `/api/v1/product-entries/{id}/pause` and `/resume`.
+- `/api/v1/product-entries/{id}/listings/{listing_id}` — `PATCH` the shop's name or URL,
+  `DELETE` to remove that shop while keeping the entry, the other shop, and the history.
 - `/api/v1/search` — `POST` to find a product by name across every searchable shop,
   without tracking anything. Returns ranked candidates plus the shops that could not
   answer **and why** — a blocked retailer is reported as blocked, never as "no results".
@@ -333,6 +377,18 @@ product-tracker remove <ID> [--yes]
 product-tracker history <ID> [--stats] [--availability] [--limit 20]
 product-tracker pause <ID> / resume <ID>
 
+# One product across Amazon and Flipkart (Product Entries)
+product-tracker entries add --name "Galaxy S25" \
+    --amazon-name "S25 256GB" --amazon-url "https://www.amazon.in/dp/..." \
+    --flipkart-name "S25 256GB" --flipkart-url "https://www.flipkart.com/.../p/itm..."
+product-tracker entries list [--archived]
+product-tracker entries show <ID>
+product-tracker entries edit <ID> [--name] [--amazon-url] [--flipkart-url]
+product-tracker entries check <ID> [--retailer amazon-in|flipkart]
+product-tracker entries pause <ID> / resume <ID>
+product-tracker entries remove <ID> [--yes]            # archives, keeps history
+product-tracker entries remove-retailer <ID> flipkart  # drops one shop only
+
 # Comparing one product across shops and models
 product-tracker groups add "Galaxy S25" [--category phone]
 product-tracker groups list
@@ -355,6 +411,30 @@ product-tracker worker [--dry-run]
 product-tracker check-all [--limit 100]
 product-tracker status / config / stores list
 ```
+
+## 9a. The web pages
+
+Server-rendered, no build step and no Node. Start the API and open:
+
+```
+http://127.0.0.1:8000/ui/products        # everything you track, both shops per row
+http://127.0.0.1:8000/ui/products/new    # the Add Product form
+```
+
+The form takes a product name plus a name and URL for each shop. It validates the retailer
+of each link, keeps every field filled in when something is rejected, and disables its own
+submit button so a double click cannot become a second product.
+
+The detail page shows each shop as its own panel with a "Check now" that refreshes only
+that panel, a comparison table marking the cheapest, and each shop's recent prices in its
+own section. It distinguishes **eight** states — not checked, in stock, out of stock, stock
+unknown, shop refused us, check failed, check skipped, paused — because a shop that blocked
+us and a product that is sold out are different facts, and showing both as "Out of stock"
+would make the whole tool untrustworthy.
+
+Authentication follows the API. With no `API_KEY` set (the localhost default) the pages
+just work; where keys are in use the pages accept one from a `pt_key` cookie, since a
+browser form cannot send a header.
 
 ## 10. Running the scheduler/workers
 

@@ -1,0 +1,156 @@
+/* One stylesheet, no build step. Tones are named for what they mean -- good, caution,
+   bad, muted -- so the template never has to know a colour, and "we could not read this"
+   never accidentally borrows the styling of "this is sold out". */
+
+:root {
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --ink: #1b1c1f;
+  --ink-soft: #5c6069;
+  --line: #e2e3e7;
+  --accent: #2f5bd7;
+  --good: #16794a;
+  --good-bg: #e7f5ee;
+  --caution: #8a5b00;
+  --caution-bg: #fdf3e0;
+  --bad: #a52020;
+  --bad-bg: #fceaea;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16171a;
+    --surface: #1f2126;
+    --ink: #eceef2;
+    --ink-soft: #a2a7b2;
+    --line: #32353d;
+    --accent: #7aa0ff;
+    --good: #63d29b;
+    --good-bg: #16301f;
+    --caution: #e8b465;
+    --caution-bg: #33260f;
+    --bad: #f08a8a;
+    --bad-bg: #351a1a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+main { max-width: 960px; margin: 0 auto; padding: 24px 20px 48px; }
+
+/* --- header ------------------------------------------------------------------ */
+.bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 12px 20px;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 650; color: var(--ink); text-decoration: none; }
+.bar nav { display: flex; gap: 8px; align-items: center; }
+.bar nav a { color: var(--ink-soft); text-decoration: none; padding: 6px 10px; border-radius: 8px; }
+.bar nav a:hover { background: var(--bg); color: var(--ink); }
+.bar nav a.primary { background: var(--accent); color: #fff; }
+
+/* --- typography --------------------------------------------------------------- */
+h1 { font-size: 1.6rem; margin: 0 0 4px; }
+h2 { font-size: 1.15rem; margin: 32px 0 10px; }
+h3 { font-size: 1rem; margin: 0 0 6px; }
+.lede { color: var(--ink-soft); margin: 0 0 20px; }
+.hint { color: var(--ink-soft); font-size: 0.86rem; margin: 4px 0 12px; }
+
+.page-head { display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: flex-start; }
+
+/* --- forms -------------------------------------------------------------------- */
+.card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 20px;
+}
+label { display: block; font-weight: 550; margin: 14px 0 5px; font-size: 0.92rem; }
+input {
+  width: 100%; padding: 9px 11px; font: inherit; color: var(--ink);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+}
+input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 16px 16px; margin: 20px 0 0; }
+legend { padding: 0 6px; font-weight: 600; color: var(--ink-soft); }
+
+.actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 20px; }
+.inline { display: inline; }
+
+.button {
+  display: inline-block; padding: 8px 14px; font: inherit; font-weight: 550;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  color: var(--ink); cursor: pointer; text-decoration: none;
+}
+.button:hover { border-color: var(--ink-soft); }
+.button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.button.ghost { background: transparent; }
+.button.danger { color: var(--bad); border-color: var(--bad); }
+.button.small { padding: 5px 10px; font-size: 0.86rem; }
+.button:disabled { opacity: 0.55; cursor: progress; }
+
+.errors {
+  background: var(--bad-bg); border: 1px solid var(--bad); color: var(--bad);
+  border-radius: var(--radius); padding: 12px 16px; margin-bottom: 18px;
+}
+.errors ul { margin: 6px 0 0; padding-left: 18px; }
+.notice {
+  background: var(--good-bg); border: 1px solid var(--good); color: var(--good);
+  border-radius: var(--radius); padding: 10px 14px; margin: 16px 0;
+}
+
+/* --- retailer panels ----------------------------------------------------------- */
+.panels { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 8px; }
+.panel {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 16px;
+}
+.panel.inactive { opacity: 0.6; }
+.panel header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.your-name { color: var(--ink-soft); font-size: 0.9rem; margin: 2px 0 10px; }
+.price { font-size: 1.7rem; font-weight: 650; margin: 0 0 6px; }
+.state { font-weight: 600; margin: 0 0 4px; }
+.explain { color: var(--ink-soft); font-size: 0.84rem; margin: 0 0 12px; }
+.meta { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 0.85rem; margin: 0 0 12px; }
+.meta dt { color: var(--ink-soft); }
+.meta dd { margin: 0; }
+.panel-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* Tones. These are the whole point: three different reasons for "no price" must not
+   look like each other, and none of them may look like "sold out". */
+.good { color: var(--good); }
+.caution { color: var(--caution); }
+.bad { color: var(--bad); }
+.muted { color: var(--ink-soft); }
+
+.badge { font-size: 0.75rem; font-weight: 650; padding: 2px 8px; border-radius: 999px; }
+.badge.good { background: var(--good-bg); color: var(--good); }
+.badge.muted { background: var(--bg); color: var(--ink-soft); }
+
+.spinner { display: none; font-size: 0.84rem; color: var(--ink-soft); }
+.htmx-request .spinner, .spinner.htmx-request { display: inline; }
+
+/* --- tables --------------------------------------------------------------------- */
+table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+thead th { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-soft); }
+tbody tr:last-child td, tbody tr:last-child th { border-bottom: none; }
+td.best { font-weight: 650; color: var(--good); }
+.cell-price { display: block; font-weight: 600; }
+.cell-state { display: block; font-size: 0.8rem; }
+.listing a { color: var(--accent); text-decoration: none; }
+.listing a:hover { text-decoration: underline; }
+
+.empty { text-align: center; padding: 40px 20px; }
+.empty .button { margin-top: 8px; }
+
+.danger { margin-top: 40px; padding-top: 8px; border-top: 1px solid var(--line); }
+
+.foot { max-width: 960px; margin: 0 auto; padding: 0 20px 32px; color: var(--ink-soft); font-size: 0.84rem; }

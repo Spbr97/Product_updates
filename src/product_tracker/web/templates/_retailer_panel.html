@@ -1,0 +1,39 @@
+{# One shop's panel. Swapped in place by htmx after a check, so the rest of the page and
+   the other retailer's state are left exactly as they were. #}
+<article class="panel {{ 'inactive' if not listing.is_active else '' }}"
+         id="listing-{{ listing.id }}">
+  <header>
+    <h3>{{ listing.store_name }}</h3>
+    {% if is_cheapest %}<span class="badge good">Cheapest</span>{% endif %}
+  </header>
+
+  <p class="your-name">{{ listing.product_name }}</p>
+
+  <p class="price">{{ listing.price_text }}</p>
+
+  <p class="state {{ listing.view.tone }}">{{ listing.view.label }}</p>
+  <p class="explain">{{ listing.view.explanation }}</p>
+
+  <dl class="meta">
+    <dt>Last checked</dt>
+    <dd>{{ listing.last_checked or 'never' }}</dd>
+    <dt>Check status</dt>
+    <dd>{{ listing.last_status or '—' }}</dd>
+  </dl>
+
+  <div class="panel-actions">
+    <a class="button ghost small" href="{{ listing.url }}" target="_blank"
+       rel="noopener noreferrer">Open shop</a>
+    {% if listing.is_active %}
+    <button class="button small"
+            hx-post="/ui/products/{{ entry_id }}/listings/{{ listing.id }}/check"
+            hx-target="#listing-{{ listing.id }}"
+            hx-swap="outerHTML"
+            hx-disabled-elt="this"
+            hx-indicator="#spin-{{ listing.id }}">
+      Check now
+    </button>
+    <span class="spinner" id="spin-{{ listing.id }}">checking…</span>
+    {% endif %}
+  </div>
+</article>

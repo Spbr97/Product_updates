@@ -114,6 +114,32 @@ implementation. Job ids are deterministic (`product:42`), so scheduling a produc
 replaces its job instead of adding a second. Celery would be one more implementation, with
 nothing else to change.
 
+### Product Entries sit above listings, not beside them
+
+```
+ProductEntry            the identity a person keeps
+    |
+    +-- RetailerListing     one per shop: their name for it, their URL, active or not
+            |
+            +-- Product         the tracking target, shared between users
+                    |
+                    +-- price_history / availability_history / check_executions
+```
+
+`RetailerListing` is a thin layer over `products`, not a replacement for it. The product
+row stays the thing the engine checks and the thing history hangs off; the listing carries
+what belongs to one user's entry. Its foreign key to `products` is `RESTRICT`, so removing
+a listing can never cascade into a shared product's observations.
+
+The partial unique index `(product_entry_id, store_slug) WHERE deactivated_at IS NULL`
+allows at most one live listing per shop per entry while letting a deactivated one sit
+beside its replacement — which is exactly what re-pointing a URL leaves behind.
+
+Multi-user arrived with `users` and `subscriptions` (migration 0007): listings are shared
+rows, and who watches what is a subscription. Per-store pacing is shared across processes
+through `store_pacing` (migration 0010), so two people searching at once queue behind the
+same slots rather than acting as two independent rate limiters.
+
 ## Data model
 
 ```
@@ -144,11 +170,10 @@ and a misbehaving rule or an unreachable provider is logged and recorded, not ra
 
 ## What is deliberately not here
 
-- **Multi-user.** One shared API key. Accounts, sessions, and scopes belong with the
-  feature that needs them.
 - **Celery/Redis.** APScheduler with a Postgres job store covers one worker; `JobQueue`
   makes the swap cheap when it is actually needed.
-- **A shared rate limit.** The API's limiter is per-process and in-memory; two API
-  processes each enforce their own. A shared ceiling needs Redis.
+- **A shared *API* rate limit.** The API's per-client limiter is per-process and
+  in-memory; two API processes each enforce their own. (Per-*store* pacing *is* shared —
+  see `store_pacing` below.)
 - **Anti-bot evasion.** Blocks are recorded and respected. No CAPTCHA solving, no
   fingerprint spoofing, no credential use.

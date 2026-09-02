@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ entry.canonical_name }} &middot; Product Tracker{% endblock %}
+
+{% block content %}
+<h1>Edit product</h1>
+<p class="lede">
+  Entry #{{ entry.id }}. Editing never creates a second product, and changing a shop&rsquo;s
+  link keeps everything already recorded at the old one.
+</p>
+
+{% if errors %}
+<div class="errors" role="alert">
+  <strong>That didn&rsquo;t go through.</strong>
+  <ul>{% for message in errors %}<li>{{ message }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<form method="post" action="/ui/products/{{ entry.id }}" class="card">
+  <label for="product_name">Product name</label>
+  <input id="product_name" name="product_name" required maxlength="200"
+         value="{{ values.product_name }}" />
+
+  {% for listing in listings %}
+  <fieldset>
+    <legend>{{ listing.store_name }}</legend>
+    <label for="name_{{ listing.id }}">Product name at this shop</label>
+    <input id="name_{{ listing.id }}" name="name_{{ listing.id }}" maxlength="200"
+           value="{{ listing.product_name }}" />
+
+    <label for="url_{{ listing.id }}">Product URL</label>
+    <input id="url_{{ listing.id }}" name="url_{{ listing.id }}" type="url"
+           value="{{ listing.url }}" />
+    <p class="hint">
+      Must stay a {{ listing.store_name }} link. Changing it points this shop at a new
+      page; the prices already recorded stay attached to the old one, because that is
+      where they were seen.
+    </p>
+  </fieldset>
+  {% endfor %}
+
+  <div class="actions">
+    <a class="button ghost" href="/ui/products/{{ entry.id }}">Cancel</a>
+    <button type="submit" class="button primary">Save changes</button>
+  </div>
+</form>
+{% endblock %}
