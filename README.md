@@ -79,21 +79,26 @@ search tries them in order until one answers:
 2. **Their catalogue (sitemap)** — a static file they publish for crawlers. Carries URLs
    but no prices, so the best few hits get their product page fetched to fill them in
    (`SEARCH_PRICE_LOOKUPS`, default 5).
-3. **Their browse listings** — category and brand pages they publish. Code is in place;
-   not yet enabled (see `stores/searches/flipkart.yaml` for exactly what remains).
+3. **Their browse listings** — the category and brand pages they publish for crawlers.
+   These carry prices, but are ordered by the shop's idea of popularity, so the search
+   pages through them until the model appears and stops as soon as it does.
 
 Where each shop stands, verified 2026-09-02:
 
 | Shop | Finding by name | Tracking a pasted link |
 |---|---|---|
 | Amazon India | ✅ their search | ✅ |
+| Flipkart | ✅ browse listings — **name the brand** (see below) | ✅ |
 | Reliance Digital | ✅ catalogue, prices filled in | ✅ |
 | Vijay Sales | ✅ catalogue, prices filled in | ✅ |
 | Samsung | ✅ catalogue, prices filled in — current models only | ✅ |
-| Flipkart | ❌ search disallowed; catalogue is ~275M URLs | ✅ |
 | BigBasket | ❌ search disallowed, publishes no catalogue | ✅ |
 | Croma | ❌ blocks us (HTTP 403) | ❌ |
 | Sangeetha | ❌ stopped answering | ⚠️ intermittent |
+
+**Flipkart needs the maker's name.** They publish listings per brand, not per model, so
+`"Samsung Galaxy S25"` finds it and `"Galaxy S25"` gets a message asking for the brand
+rather than four wasted requests. Every other shop is happy with either.
 
 **Search only accepts a named product.** "Galaxy S25" works; "phone", "earbuds" and
 "best power bank" are refused with a message saying why. This is not fussiness: a shop's
