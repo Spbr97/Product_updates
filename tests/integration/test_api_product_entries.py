@@ -396,3 +396,86 @@ class TestOwnershipOverHttp:
             ).status_code
             == 404
         )
+
+
+class TestProtection:
+    def test_an_oversized_body_is_413(self, client: TestClient) -> None:
+        """The body-size guard applies to every mutating route, this one included."""
+        fat = {**payload(), "product_name": "x" * 200_000}
+
+        response = client.post(ENTRIES, json=fat)
+
+        assert response.status_code == 413
+
+class TestTrackingMatrix:
+    """The §56 tracking rows, at the entry level, through /check and /history.
+
+    Each check runs against a listing's product through the ordinary engine; what is
+    asserted is that the entry does not get in the way -- one shop's result never lands in
+    another shop's history, an unchanged price adds nothing, and a missing price is
+    recorded without becoming "out of stock".
+    """
+
+    def _amazon_prices(self, client: TestClient, entry_id: int) -> list:
+        body = client.get(f"{ENTRIES}/{entry_id}/history").json()
+        section = next(s for s in body["listings"] if s["store"] == "amazon-in")
+        return [p["price"] for p in section["prices"]]
+
+    def _flipkart_prices(self, client: TestClient, entry_id: int) -> list:
+        body = client.get(f"{ENTRIES}/{entry_id}/history").json()
+        section = next(s for s in body["listings"] if s["store"] == "flipkart")
+        return [p["price"] for p in section["prices"]]
+
+    def test_a_price_change_on_amazon_leaves_flipkart_untouched(
+        self, client: TestClient
+    ) -> None:
+        stub_all()
+        entry = create(client)
+        eid = entry["id"]
+        client.post(f"{ENTRIES}/{eid}/check")
+        flipkart_before = self._flipkart_prices(client, eid)
+
+        # Amazon now quotes a different page; Flipkart's is unchanged.
+        respx.get(AMAZON_URL).mock(
+            return_value=httpx.Response(200, html=load("jsonld_out_of_stock.html"))
+        )
+        client.post(f"{ENTRIES}/{eid}/check")
+
+        assert self._flipkart_prices(client, eid) == flipkart_before
+
+    def test_an_unchanged_price_adds_no_history_row(self, client: TestClient) -> None:
+        """Flipkart's page (JSON-LD) is the one the fixture parses; three identical reads
+        must still leave exactly one observation."""
+        stub_all()
+        eid = create(client)["id"]
+
+        client.post(f"{ENTRIES}/{eid}/check")
+        client.post(f"{ENTRIES}/{eid}/check")
+        client.post(f"{ENTRIES}/{eid}/check")
+
+        assert len(self._flipkart_prices(client, eid)) == 1
+
+    def test_a_missing_price_is_recorded_and_is_not_out_of_stock(
+        self, client: TestClient
+    ) -> None:
+        stub_all()
+        entry = create(client)
+        eid = entry["id"]
+        respx.get(AMAZON_URL).mock(
+            return_value=httpx.Response(200, html=load("amazon_no_price.html"))
+        )
+
+        results = client.post(f"{ENTRIES}/{eid}/check").json()["results"]
+        amazon = next(r for r in results if r["store"] == "amazon-in")
+
+        assert amazon["status"] != "success"
+        assert amazon["price"] is None
+        assert amazon["availability"] in (None, "unknown")
+        # And the listing on the detail response still shows no price, not a zero.
+        listing = next(
+            x
+            for x in client.get(f"{ENTRIES}/{eid}").json()["listings"]
+            if x["store"] == "amazon-in"
+        )
+        assert listing["price"] is None
+

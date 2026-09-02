@@ -28,6 +28,7 @@ from ..api.deps import API_KEY_HEADER, Config, DbSession
 from ..db.models import ProductEntry, RetailerListing, User
 from ..domain.enums import CheckStatus, ProductEntryStatus, TrackingStatus
 from ..domain.errors import DuplicateError, NotFoundError, ValidationError
+from ..repositories.rules import TrackingRuleRepository
 from ..services.check_runner import run_check
 from ..services.history_service import HistoryService
 from ..services.product_entry_service import ListingInput, ProductEntryService
@@ -271,6 +272,8 @@ def detail_page(
             "mixed_currency": len(currencies) > 1,
             "paused": _is_paused(entry),
             "history": _history(session, entry),
+            "stats": _stats(session, entry),
+            "alerts": _alerts(session, entry),
             "notice": notice,
         },
     )
@@ -302,6 +305,66 @@ def _history(session: Any, entry: ProductEntry) -> list[dict[str, Any]]:
             }
         )
     return sections
+
+
+def _stats(session: Any, entry: ProductEntry) -> list[dict[str, Any]]:
+    """Price statistics, one block per shop. Retailer-specific by design: a merged series
+    across two shops in two currencies is not a thing that ever existed."""
+    service = HistoryService(session)
+    blocks = []
+    for listing in entry.listings:
+        st = service.stats(listing.product_id)
+        blocks.append(
+            {
+                "store_name": _store_name(listing.store_slug),
+                "has_data": st is not None and st.observations > 0,
+                "currency": st.currency if st else None,
+                "observations": st.observations if st else 0,
+                "current": _money(st.current, st.currency) if st else "—",
+                "lowest": _money(st.lowest, st.currency) if st else "—",
+                "highest": _money(st.highest, st.currency) if st else "—",
+                "average": _money(st.average, st.currency) if st else "—",
+                "lowest_at": (
+                    st.lowest_at.strftime("%Y-%m-%d") if st and st.lowest_at else "—"
+                ),
+                "changed_by": _money(st.changed_by, st.currency) if st else "—",
+                "mixed_currency": bool(st and st.mixed_currency),
+            }
+        )
+    return blocks
+
+
+def _alerts(session: Any, entry: ProductEntry) -> list[dict[str, Any]]:
+    """Alert rules already set on this entry's listings.
+
+    Read-only here: rules attach to the underlying product and are created through
+    ``/api/v1/alerts`` or ``product-tracker alerts``. Showing them is right; adding a
+    fourth place to manage them is the scope creep the spec warns against.
+    """
+    rules_repo = TrackingRuleRepository(session)
+    blocks = []
+    for listing in entry.listings:
+        rules = rules_repo.list_for_product(listing.product_id)
+        blocks.append(
+            {
+                "store_name": _store_name(listing.store_slug),
+                "rules": [
+                    {
+                        "type": rule.rule_type.value.replace("_", " "),
+                        "enabled": rule.enabled,
+                        "params": ", ".join(f"{k}={v}" for k, v in (rule.params or {}).items()),
+                    }
+                    for rule in rules
+                ],
+            }
+        )
+    return blocks
+
+
+def _money(value: Any, currency: str | None) -> str:
+    if value is None:
+        return "—"
+    return f"{currency or ''} {value:,.2f}".strip()
 
 
 def _not_found(request: Request) -> HTMLResponse:

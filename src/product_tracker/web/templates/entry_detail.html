@@ -106,6 +106,55 @@
   </p>
 </section>
 
+<section>
+  <h2>Statistics</h2>
+  {% for block in stats %}
+  <h3>{{ block.store_name }}</h3>
+  {% if block.has_data %}
+  <dl class="stats">
+    <div><dt>Current</dt><dd>{{ block.current }}</dd></div>
+    <div><dt>Lowest</dt><dd>{{ block.lowest }}<span class="muted"> ({{ block.lowest_at }})</span></dd></div>
+    <div><dt>Highest</dt><dd>{{ block.highest }}</dd></div>
+    <div><dt>Average</dt><dd>{{ block.average }}</dd></div>
+    <div><dt>Since first seen</dt><dd>{{ block.changed_by }}</dd></div>
+    <div><dt>Observations</dt><dd>{{ block.observations }}</dd></div>
+  </dl>
+  {% if block.mixed_currency %}
+  <p class="hint">This shop has quoted more than one currency; figures cover the most recent.</p>
+  {% endif %}
+  {% else %}
+  <p class="hint">No prices recorded yet, so there is nothing to summarise.</p>
+  {% endif %}
+  {% endfor %}
+</section>
+
+<section>
+  <h2>Alerts</h2>
+  {% set any_rules = alerts | selectattr('rules') | list %}
+  {% if any_rules %}
+  {% for block in alerts %}
+  {% if block.rules %}
+  <h3>{{ block.store_name }}</h3>
+  <ul class="rules">
+    {% for rule in block.rules %}
+    <li>
+      <strong>{{ rule.type }}</strong>
+      {% if rule.params %}<span class="muted">{{ rule.params }}</span>{% endif %}
+      {% if not rule.enabled %}<span class="badge muted">disabled</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% endfor %}
+  {% else %}
+  <p class="hint">No alerts on this product yet.</p>
+  {% endif %}
+  <p class="hint">
+    Alerts are set per shop through <code>product-tracker alerts</code> or the
+    <code>/api/v1/alerts</code> endpoint, against a listing&rsquo;s product.
+  </p>
+</section>
+
 <section class="danger">
   <h2>Stop tracking</h2>
   <p class="hint">

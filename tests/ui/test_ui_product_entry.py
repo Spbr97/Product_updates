@@ -360,3 +360,55 @@ class TestRemoval:
 
     def test_an_unknown_entry_is_404(self, client: TestClient) -> None:
         assert client.get("/ui/products/9999").status_code == 404
+
+
+class TestDetailPageSections:
+    """The spec's detail page lists four blocks: comparison, history, statistics, alerts."""
+
+    def test_statistics_block_is_present(self, client: TestClient) -> None:
+        stub_all()
+        location = create(client)
+        client.post(f"{location}/check", follow_redirects=False)
+
+        page = client.get(location).text
+
+        assert "<h2>Statistics</h2>" in page
+        # Populated per shop from a real check.
+        assert "Observations" in page
+
+    def test_alerts_block_is_present_even_with_no_rules(
+        self, client: TestClient
+    ) -> None:
+        stub_all()
+        location = create(client)
+
+        page = client.get(location).text
+
+        assert "<h2>Alerts</h2>" in page
+        assert "No alerts on this product yet" in page
+
+    def test_a_rule_on_a_listing_shows_on_the_page(self, client: TestClient) -> None:
+        """Read-only: rules are created elsewhere, but the entry page must show them."""
+        from product_tracker.db.session import session_scope
+        from product_tracker.domain.enums import RuleType
+        from product_tracker.services.alert_service import AlertService
+
+        stub_all()
+        location = create(client)
+        entry_id = int(location.rsplit("/", 1)[-1])
+
+        with session_scope() as session:
+            from sqlalchemy import select
+
+            from product_tracker.db.models import RetailerListing
+
+            listing = session.execute(
+                select(RetailerListing).where(
+                    RetailerListing.product_entry_id == entry_id,
+                    RetailerListing.store_slug == "amazon-in",
+                )
+            ).scalar_one()
+            AlertService(session, 1).add(listing.product_id, RuleType.PRICE_DROPPED)
+
+        page = client.get(location).text
+        assert "price dropped" in page
