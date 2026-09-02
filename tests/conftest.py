@@ -160,6 +160,12 @@ _DATA_TABLES = (
     "availability_history",
     "price_history",
     "check_executions",
+    # Entry tables before products: retailer_listings references products with RESTRICT,
+    # so truncating products first would be refused. TRUNCATE ... CASCADE covers it, but
+    # naming them keeps the order honest and the intent readable.
+    "retailer_listing_url_audits",
+    "retailer_listings",
+    "product_entries",
     "products",
     # Grouping tables: without these a group created by one test is still there for the
     # next one, which quietly turns "list the groups" assertions into order-dependent

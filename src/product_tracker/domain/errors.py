@@ -76,6 +76,40 @@ class DuplicateError(ProductTrackerError):
         self.identifier = identifier
 
 
+class DuplicateListingError(DuplicateError):
+    """This retailer URL is already live in one of the caller's Product Entries.
+
+    A subclass so it still answers 409, while the envelope names it precisely. The message
+    carries the entry it clashes with, because "already tracked" without saying *where*
+    leaves the user hunting through their own list.
+    """
+
+    def __init__(self, url: str, entry_id: int) -> None:
+        super().__init__("RetailerListing", url)
+        self.message = f"this URL is already associated with Product Entry #{entry_id}"
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return self.message
+
+
+class InvalidStoreURLError(ValidationError):
+    """A URL was given for the wrong retailer's field.
+
+    The Amazon field taking a Flipkart URL is not a typo to be silently corrected: the two
+    listings track independently, and quietly filing one under the other would put a
+    retailer's prices in the wrong column for as long as the entry lived.
+    """
+
+    def __init__(self, expected_store: str, actual_store: str, url: str) -> None:
+        super().__init__(
+            f"the {expected_store} field needs a link from {expected_store}; "
+            f"{url!r} is {actual_store}"
+        )
+        self.expected_store = expected_store
+        self.actual_store = actual_store
+
+
 # --- Stores ----------------------------------------------------------------------
 
 

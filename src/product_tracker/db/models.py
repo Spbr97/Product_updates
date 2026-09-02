@@ -27,6 +27,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
@@ -37,6 +38,7 @@ from ..domain.enums import (
     CheckStatus,
     FetchMethod,
     NotificationStatus,
+    ProductEntryStatus,
     RuleType,
     TrackingStatus,
 )
@@ -267,6 +269,140 @@ class VariantListing(Base):
 
     variant: Mapped[ProductVariant] = relationship(back_populates="listings")
     product: Mapped[Product] = relationship(lazy="joined")
+
+
+class ProductEntry(Base):
+    """A user's stable logical product -- "Samsung Galaxy S25 256GB".
+
+    The identity a person keeps. Prices move, retailer URLs get replaced, one shop stops
+    stocking it; through all of that the entry keeps its id, and every observation stays
+    attached to the retailer listing that saw it. That is the whole point: a price change
+    must never look like a new product.
+
+    Distinct from :class:`ProductGroup`, which is a *comparison* layer spanning models and
+    colours. An entry is one product; a group organises many. Both may exist over the same
+    listings, and neither replaces the other.
+
+    ``canonical_name`` is deliberately not unique. Two people may track the same phone, and
+    one person may legitimately keep two entries named alike pointing at different
+    listings; uniqueness by name would be a guess about intent the database has no business
+    making.
+    """
+
+    __tablename__ = "product_entries"
+    __table_args__ = (Index("ix_product_entries_user_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    canonical_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[ProductEntryStatus] = mapped_column(
+        _pg_enum(ProductEntryStatus, "product_entry_status"),
+        nullable=False,
+        default=ProductEntryStatus.ACTIVE,
+        server_default=ProductEntryStatus.ACTIVE.value,
+    )
+    #: Set when archived. Soft, because the listings below hold months of observations and
+    #: "I stopped following this" is not "this never happened".
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    listings: Mapped[list[RetailerListing]] = relationship(
+        back_populates="entry",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="RetailerListing.store_slug",
+    )
+
+
+class RetailerListing(Base):
+    """One retailer's listing of a Product Entry: a store, a name, and a URL.
+
+    A thin layer over ``products``. The product row remains the tracking target -- history,
+    check executions and alert rules all key on it, and it is shared between users -- while
+    this row carries what is specific to *this user's entry*: which entry it belongs to,
+    the name they gave it at that shop, and whether they still want it.
+
+    ``product_id`` is RESTRICT, not CASCADE, on purpose. Removing a listing must never be
+    able to take a shared product row and its observations with it; the listing is
+    deactivated instead, and the product is cleaned up by its own subscriber rules.
+    """
+
+    __tablename__ = "retailer_listings"
+    __table_args__ = (
+        # At most one *active* listing per retailer per entry. Partial, so a deactivated
+        # Amazon listing does not block adding a replacement Amazon listing -- which is
+        # exactly what happens when someone re-points an entry at a different URL.
+        Index(
+            "uq_retailer_listings_active_store",
+            "product_entry_id",
+            "store_slug",
+            unique=True,
+            postgresql_where=text("deactivated_at IS NULL"),
+        ),
+        Index("ix_retailer_listings_entry_id", "product_entry_id"),
+        Index("ix_retailer_listings_product_id", "product_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_entry_id: Mapped[int] = mapped_column(
+        ForeignKey("product_entries.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
+    )
+    store_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: What the *user* called it at this shop. Distinct from ``Product.name``, which is
+    #: whatever the retailer's page published at the last check -- the two disagree often,
+    #: and overwriting the user's wording with a scraped title would be rude.
+    product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    #: Set when the user removes this retailer. The entry and the other retailer are
+    #: untouched, and the observations already recorded stay readable.
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    entry: Mapped[ProductEntry] = relationship(back_populates="listings")
+    product: Mapped[Product] = relationship(lazy="joined")
+
+    @property
+    def is_active(self) -> bool:
+        return self.deactivated_at is None
+
+
+class RetailerListingUrlAudit(Base):
+    """A record that a listing's URL was replaced, and by what.
+
+    Kept apart from price history on purpose. Re-pointing a listing at a new URL must not
+    rewrite a single observation -- the old prices were genuinely seen at the old URL -- so
+    the fact that the URL moved is recorded here instead, where it explains a discontinuity
+    without falsifying it.
+    """
+
+    __tablename__ = "retailer_listing_url_audits"
+    __table_args__ = (Index("ix_listing_url_audits_listing_id", "retailer_listing_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    retailer_listing_id: Mapped[int] = mapped_column(
+        ForeignKey("retailer_listings.id", ondelete="CASCADE"), nullable=False
+    )
+    old_url: Mapped[str] = mapped_column(Text, nullable=False)
+    new_url: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class Product(Base):

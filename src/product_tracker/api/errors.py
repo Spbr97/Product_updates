@@ -17,6 +17,8 @@ from ..core.logging import get_logger
 from ..domain.errors import (
     ConfigurationError,
     DuplicateError,
+    DuplicateListingError,
+    InvalidStoreURLError,
     NoAdapterError,
     NotFoundError,
     ProductTrackerError,
@@ -32,8 +34,12 @@ _HTTP_422 = 422
 #: Domain exception -> (HTTP status, stable error code).
 _ERROR_MAP: tuple[tuple[type[Exception], int, str], ...] = (
     (NotFoundError, status.HTTP_404_NOT_FOUND, "not_found"),
+    # Both of these are subclasses, so they must precede their parents: the map is scanned
+    # in order and the first match wins.
+    (DuplicateListingError, status.HTTP_409_CONFLICT, "duplicate_listing"),
     (DuplicateError, status.HTTP_409_CONFLICT, "conflict"),
     (NoAdapterError, _HTTP_422, "unsupported_store"),
+    (InvalidStoreURLError, _HTTP_422, "invalid_store_url"),
     (ValidationError, _HTTP_422, "validation_error"),
     (ConfigurationError, status.HTTP_500_INTERNAL_SERVER_ERROR, "configuration_error"),
     (StoreError, status.HTTP_502_BAD_GATEWAY, "store_error"),

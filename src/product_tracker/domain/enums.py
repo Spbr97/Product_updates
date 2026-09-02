@@ -29,6 +29,18 @@ class TrackingStatus(StrEnum):
     PAUSED = "paused"
 
 
+class ProductEntryStatus(StrEnum):
+    """Whether a Product Entry is still watched.
+
+    Archiving rather than deleting: an entry's listings carry months of observations, and
+    "I stopped following this" is a different fact from "this never happened". Archived
+    entries keep their history and stop being scheduled.
+    """
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
 class RuleType(StrEnum):
     PRICE_CHANGED = "price_changed"
     PRICE_DROPPED = "price_dropped"

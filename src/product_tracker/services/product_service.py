@@ -80,6 +80,37 @@ class ProductService:
         ``NotFoundError`` if the resolved store has no database row (run
         ``product-tracker stores sync``).
         """
+        canonical = canonicalize_url(
+            validate_url(
+                url,
+                allowed_schemes=self.settings.url_schemes,
+                block_private=self.settings.block_private_addresses,
+                max_length=self.settings.max_url_length,
+            )
+        )
+        existing = self.products.get_by_canonical_url(canonical)
+        if existing is not None and self.subscriptions.is_subscribed(
+            self._owner_id(), existing.id
+        ):
+            # Already watching it. A duplicate rather than a quota problem, because it is
+            # one -- and it adds nothing to what this account watches.
+            raise DuplicateError("Product", canonical)
+
+        return self.track_url(url, check_interval_seconds=check_interval_seconds)
+
+    def track_url(self, url: str, *, check_interval_seconds: int | None = None) -> Product:
+        """Turn a URL into a tracked row this user is subscribed to, and return it.
+
+        The shared half of :meth:`add`, split out because Product Entries need exactly this
+        and nothing else. It validates, canonicalises, enforces the quota, joins an existing
+        row when one exists, and creates one when it does not.
+
+        What it deliberately does *not* do is decide whether re-using a URL is a mistake.
+        ``add`` treats "you already watch this" as a duplicate; an entry treats "this URL is
+        already live in one of your entries" as the conflict, which is a different question
+        with a different answer. Each caller raises its own, so neither has to unpick the
+        other's.
+        """
         validated = validate_url(
             url,
             allowed_schemes=self.settings.url_schemes,
@@ -87,18 +118,14 @@ class ProductService:
             max_length=self.settings.max_url_length,
         )
         canonical = canonicalize_url(validated)
-
-        existing = self.products.get_by_canonical_url(canonical)
         owner = self._owner_id()
-        if existing is not None and self.subscriptions.is_subscribed(owner, existing.id):
-            # Already watching it. A duplicate rather than a quota problem, because it is
-            # one -- and it adds nothing to what this account watches.
-            raise DuplicateError("Product", canonical)
+        existing = self.products.get_by_canonical_url(canonical)
 
         # Before either branch below. Checking only when creating a *new* row left the
         # ceiling trivially avoidable: let somebody else add the listing, then subscribe to
         # it for free. The quota is on what an account watches, not on what it created.
-        self._check_quota()
+        if existing is None or not self.subscriptions.is_subscribed(owner, existing.id):
+            self._check_quota()
 
         if existing is not None:
             # Somebody else already tracks it: join them on the same row.
