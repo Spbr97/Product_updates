@@ -52,6 +52,11 @@ product_tracker = [
   "stores/selectors/*.yaml",
   "stores/searches/*.yaml",
   "services/spec_profiles/*.yaml",
+  # The Product Entry pages. Without these the wheel installs the routes but not the
+  # things they render, and the API refuses to start on a missing static directory --
+  # which only shows up in a container, never in an editable install.
+  "web/templates/*.html",
+  "web/static/*.css",
 ]
 
 [tool.pytest.ini_options]
