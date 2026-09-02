@@ -32,18 +32,9 @@ sitemap: "none"
 # popularity. The Galaxy S25 was not on page one of the Samsung phone listing; it was on
 # page two, behind a Galaxy S24 and an M06. Hence browse_max_pages, and hence the early
 # stop as soon as an exact match appears.
-# NOT ENABLED YET, and the reason is one line of plumbing rather than anything about
-# Flipkart. `sitemaps._fetch_xml` recovers gzip bytes by re-encoding an already-decoded
-# string through latin-1 with errors="ignore". That survives the small uncompressed
-# sitemaps Vijay Sales and Reliance publish and destroys these two, which fail to inflate
-# ("sitemap.gunzip_failed"). The fix is a bytes-returning fetch path in stores/http.py;
-# until then, enabling these keys would make Flipkart report "names no brand it lists"
-# for every query, which blames the query for our own bug.
-#
-# To finish: add a bytes fetch, restore the two keys below, and the rest is verified.
-# browse_sitemap:
-#   - "https://www.flipkart.com/sitemap_v_view-browse.xml.gz"
-#   - "https://www.flipkart.com/sitemap_s_store-browse.xml.gz"
+browse_sitemap:
+  - "https://www.flipkart.com/sitemap_v_view-browse.xml.gz"
+  - "https://www.flipkart.com/sitemap_s_store-browse.xml.gz"
 
 browse_url_pattern: '/pr\?sid='
 browse_max_pages: 4

@@ -441,6 +441,42 @@ class TestApiKeys:
         # 403 would confirm it exists, which is itself a disclosure.
         assert response.status_code == 404
 
+    def test_checking_another_users_listing_is_refused(self, client: TestClient) -> None:
+        """``POST /products/{id}/check`` took no user at all, which made it two things.
+
+        A way to read any listing's current price by id -- the response carries
+        ``extracted_price`` -- and a way to make this deployment fetch from a retailer on
+        demand for a listing the caller does not watch. Listing ids are sequential, so
+        both were a matter of counting upwards.
+        """
+        import httpx
+        import respx
+        from tests.unit.test_adapters import load
+
+        alice_key = self.make_user("alice@example.com")
+        bob_key = self.make_user("bob@example.com")
+        url = "https://shop.example.com/p/alices-listing"
+
+        with respx.mock:
+            respx.get(url).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))
+            created = client.post(
+                "/api/v1/products", json={"url": url}, headers={"X-API-Key": alice_key}
+            )
+            assert created.status_code == 201, created.text
+            product_id = created.json()["id"]
+
+            theirs = client.post(
+                f"/api/v1/products/{product_id}/check", headers={"X-API-Key": bob_key}
+            )
+            # Not found, not forbidden: a 403 would confirm the id exists.
+            assert theirs.status_code == 404
+
+            mine = client.post(
+                f"/api/v1/products/{product_id}/check", headers={"X-API-Key": alice_key}
+            )
+            assert mine.status_code == 200
+            assert mine.json()["extracted_price"] is not None
+
     def test_the_first_key_switches_authentication_on(self, client: TestClient) -> None:
         """Before any key exists the API is open; creating one locks it down."""
         assert client.get("/api/v1/groups").status_code == 200

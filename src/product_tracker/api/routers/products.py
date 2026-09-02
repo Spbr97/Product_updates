@@ -15,6 +15,7 @@ from ...db.models import CheckExecution
 from ...domain.enums import TrackingStatus
 from ...services.check_runner import run_check
 from ...services.product_service import ProductService
+from ...services.user_service import assert_subscribed
 from ...stores.registry import default_registry
 from ..deps import Config, CurrentReader, CurrentUser, DbSession, PageParams, RequireWrite
 from ..schemas.common import ErrorResponse, Page
@@ -100,14 +101,24 @@ def delete_product(
     dependencies=[RequireWrite],
     responses={404: {"model": ErrorResponse, "description": "No such product."}},
 )
-def check_product(product_id: int, session: DbSession, settings: Config) -> CheckResponse:
+def check_product(
+    product_id: int, session: DbSession, settings: Config, user: CurrentUser
+) -> CheckResponse:
     """Run a check immediately.
 
     Returns 200 with the execution record even when the store could not be read: a failed
     check is a successfully recorded fact, and the caller inspects ``status`` and
     ``error_type``. Returning 502 here would conflate "we could not reach the store" with
     "this API is broken".
+
+    Scoped to the caller's own listings. This took no user at all before, which made it two
+    things it should never have been: a way to read any listing's current price by id --
+    the response carries ``extracted_price`` -- and a way to make this deployment fetch
+    from a retailer on demand for a listing the caller does not watch. Listing ids are
+    sequential, so both were a matter of counting. Reported as not found rather than
+    forbidden, so ids cannot be enumerated by watching which ones come back 403.
     """
+    assert_subscribed(session, user.id, product_id)
     # Runs in its own transactions, so notification delivery never holds this request's
     # database session open while an SMTP server or webhook takes its time.
     outcome = run_check(product_id, settings=settings, registry=default_registry())

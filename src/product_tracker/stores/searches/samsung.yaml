@@ -23,6 +23,11 @@
 
 url: "https://www.samsung.com/in/search/?searchvalue={query}"
 
+# They sell one brand, and leave its name out of their URLs: the Galaxy S25 lives at
+# /in/smartphones/galaxy-s25/buy/. Without this, "Samsung Galaxy S25" matches two words
+# of three here and is discarded -- on the one site certain to stock it.
+store_brand: "Samsung"
+
 # Consumer product pages all end this way. The pattern is what keeps the other 272 URLs in
 # top_sitemap.xml -- category pages, offers, support -- out of the results.
 product_url_pattern: "/buy/?$"

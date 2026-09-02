@@ -57,8 +57,70 @@ class FetchSuccess:
     http_status: int
 
 
+@dataclass(frozen=True, slots=True)
+class FetchBytes:
+    """A response body kept as bytes, for content that is not text.
+
+    Exists because ``.xml.gz`` is not text and must never be treated as it. Recovering
+    compressed bytes from an already-decoded string -- re-encoding through latin-1 and
+    hoping -- is lossy, and it lost: Flipkart's browse sitemaps failed to inflate that way
+    while the small uncompressed ones survived, which made the bug look like a Flipkart
+    problem rather than ours.
+    """
+
+    content: bytes
+    url: str
+    http_status: int
+
+
+@dataclass(frozen=True, slots=True)
+class _Raw:
+    """One successful response, before anything decides whether it is text."""
+
+    content: bytes
+    url: str
+    http_status: int
+    encoding: str | None
+
+
 def fetch(url: str, ctx: FetchContext) -> FetchSuccess | FetchFailure:
-    """Fetch a page over HTTP, returning either the body or a classified failure.
+    """Fetch a page over HTTP, returning either the body or a classified failure."""
+    raw = _fetch_raw(url, ctx)
+    if isinstance(raw, FetchFailure):
+        return raw
+    body = raw.content.decode(raw.encoding or "utf-8", errors="replace")
+    if _looks_blocked(body):
+        return FetchFailure(
+            FetchOutcome.BLOCKED,
+            "page looks like an anti-bot challenge rather than a product page",
+            http_status=raw.http_status,
+        )
+    return FetchSuccess(html=body, url=raw.url, http_status=raw.http_status)
+
+
+def fetch_bytes(url: str, ctx: FetchContext) -> FetchBytes | FetchFailure:
+    """Fetch a body and keep it as bytes.
+
+    Same guards as :func:`fetch` -- the SSRF re-check before connecting and again after
+    redirects, the status classification, the size cap. The only difference is that the
+    body is not decoded, because for gzip there is nothing to decode it into.
+    """
+    raw = _fetch_raw(url, ctx)
+    if isinstance(raw, FetchFailure):
+        return raw
+    # An anti-bot page is HTML however it was requested, so the check still applies -- run
+    # against a decoded prefix, since binary will simply not match the markers.
+    if _looks_blocked(raw.content[:_BLOCK_SCAN_BYTES].decode("utf-8", errors="replace")):
+        return FetchFailure(
+            FetchOutcome.BLOCKED,
+            "response looks like an anti-bot challenge rather than the file requested",
+            http_status=raw.http_status,
+        )
+    return FetchBytes(content=raw.content, url=raw.url, http_status=raw.http_status)
+
+
+def _fetch_raw(url: str, ctx: FetchContext) -> _Raw | FetchFailure:
+    """The whole of the network path, shared by both public entry points.
 
     ``ctx.verify_public_host`` re-runs the SSRF check immediately before connecting.
     Validation at ``add`` time can be defeated by DNS rebinding, so the guard runs again
@@ -92,16 +154,12 @@ def fetch(url: str, ctx: FetchContext) -> FetchSuccess | FetchFailure:
             if failure is not None:
                 return failure
 
-            body = _read_capped(response, ctx.max_bytes)
-
-            if _looks_blocked(body):
-                return FetchFailure(
-                    FetchOutcome.BLOCKED,
-                    "page looks like an anti-bot challenge rather than a product page",
-                    http_status=status,
-                )
-
-            return FetchSuccess(html=body, url=final_url, http_status=status)
+            return _Raw(
+                content=_read_capped(response, ctx.max_bytes),
+                url=final_url,
+                http_status=status,
+                encoding=response.encoding,
+            )
 
     except httpx.TimeoutException as exc:
         return FetchFailure(FetchOutcome.TIMEOUT, f"request timed out: {_brief(exc)}")
@@ -154,7 +212,7 @@ def _classify_status(response: httpx.Response) -> FetchFailure | None:
     return None
 
 
-def _read_capped(response: httpx.Response, max_bytes: int) -> str:
+def _read_capped(response: httpx.Response, max_bytes: int) -> bytes:
     """Read at most ``max_bytes``, so a huge or endless response cannot exhaust memory."""
     chunks: list[bytes] = []
     total = 0
@@ -166,8 +224,7 @@ def _read_capped(response: httpx.Response, max_bytes: int) -> str:
                 "fetch.truncated", url_host=host_of(str(response.url)), limit_bytes=max_bytes
             )
             break
-    raw = b"".join(chunks)
-    return raw.decode(response.encoding or "utf-8", errors="replace")
+    return b"".join(chunks)
 
 
 def _looks_blocked(html: str) -> bool:

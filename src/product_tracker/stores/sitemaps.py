@@ -32,13 +32,14 @@ import json
 import os
 import re
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from ..core.logging import get_logger
 from ..domain.models import FetchContext
-from .http import FetchSuccess
+from .http import FetchBytes, FetchSuccess, fetch_bytes
 from .http import fetch as http_fetch
 
 log = get_logger(__name__)
@@ -121,10 +122,23 @@ def clear_cache() -> None:
         path.unlink(missing_ok=True)
 
 
+#: The two bytes every gzip stream starts with. Checked rather than trusting the file
+#: extension, because some sites serve ``.xml.gz`` already inflated and others serve
+#: compressed bodies from a plain ``.xml`` URL.
+_GZIP_MAGIC = bytes((0x1F, 0x8B))
+
+
 def _fetch_xml(url: str, ctx: FetchContext) -> str | None:
-    """Fetch one sitemap, decompressing it when it is served as .gz."""
-    response = http_fetch(url, ctx)
-    if not isinstance(response, FetchSuccess):
+    """Fetch one sitemap, decompressing it when it arrives compressed.
+
+    Fetched as *bytes*. The previous version asked for text and then tried to recover the
+    compressed bytes by re-encoding the decoded string through latin-1 with
+    ``errors="ignore"`` -- which is lossy by construction, and lost: the small
+    uncompressed sitemaps survived it and Flipkart's larger gzipped ones did not, so a bug
+    in our decoding read as a fact about Flipkart.
+    """
+    response = fetch_bytes(url, ctx)
+    if not isinstance(response, FetchBytes):
         log.debug(
             "sitemap.fetch_failed",
             url_host=urlsplit(url).netloc,
@@ -132,17 +146,14 @@ def _fetch_xml(url: str, ctx: FetchContext) -> str | None:
         )
         return None
 
-    text = response.html
-    if url.endswith(".gz") and not text.lstrip().startswith("<"):
-        # ``.xml.gz`` arrives as bytes the HTTP layer decoded as text; recover and inflate.
+    body = response.content
+    if body.startswith(_GZIP_MAGIC):
         try:
-            return gzip.decompress(text.encode("latin-1", errors="ignore")).decode(
-                "utf-8", errors="replace"
-            )
-        except (OSError, ValueError, UnicodeDecodeError):
+            body = gzip.decompress(body)
+        except (OSError, EOFError, zlib.error):
             log.debug("sitemap.gunzip_failed", url_host=urlsplit(url).netloc)
             return None
-    return text
+    return body.decode("utf-8", errors="replace")
 
 
 def discover_indexes(base_url: str, ctx: FetchContext) -> tuple[str, ...]:

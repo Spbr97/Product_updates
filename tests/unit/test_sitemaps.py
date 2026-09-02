@@ -7,6 +7,7 @@ makes it both the most polite option and, for those shops, the only one that wor
 
 from __future__ import annotations
 
+import gzip
 from collections.abc import Iterator
 
 import pytest
@@ -14,7 +15,7 @@ import pytest
 from product_tracker.domain.enums import FetchOutcome, SearchOutcome
 from product_tracker.domain.models import FetchContext
 from product_tracker.stores import sitemaps
-from product_tracker.stores.http import FetchFailure, FetchSuccess
+from product_tracker.stores.http import FetchBytes, FetchFailure, FetchSuccess
 from product_tracker.stores.search import SearchConfig, SitemapSearch, score_title
 
 CTX = FetchContext(user_agent="product-tracker-test", verify_public_host=False)
@@ -52,6 +53,21 @@ class Fetcher:
             return FetchFailure(FetchOutcome.HTTP_ERROR, "missing", http_status=404)
         return FetchSuccess(html=body, url=url, http_status=200)
 
+    def as_bytes(self, url: str, ctx: FetchContext) -> FetchBytes | FetchFailure:
+        """Sitemaps are fetched as bytes, because ``.xml.gz`` is not text.
+
+        Serves the same canned pages, gzipped when the URL says so, so the compressed
+        path is exercised rather than assumed.
+        """
+        self.calls.append(url)
+        body = self.pages.get(url)
+        if body is None:
+            return FetchFailure(FetchOutcome.HTTP_ERROR, "missing", http_status=404)
+        raw = body.encode("utf-8")
+        if url.endswith(".gz"):
+            raw = gzip.compress(raw)
+        return FetchBytes(content=raw, url=url, http_status=200)
+
 
 @pytest.fixture(autouse=True)
 def _clean() -> Iterator[None]:
@@ -71,6 +87,7 @@ def fetcher(monkeypatch: pytest.MonkeyPatch) -> Fetcher:
         }
     )
     monkeypatch.setattr(sitemaps, "http_fetch", stub)
+    monkeypatch.setattr(sitemaps, "fetch_bytes", stub.as_bytes)
     return stub
 
 
@@ -106,7 +123,9 @@ class TestCollecting:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Which the caller must report as "could not look", never as "not stocked"."""
-        monkeypatch.setattr(sitemaps, "http_fetch", Fetcher({}))
+        empty = Fetcher({})
+        monkeypatch.setattr(sitemaps, "http_fetch", empty)
+        monkeypatch.setattr(sitemaps, "fetch_bytes", empty.as_bytes)
         assert collect("missing") == ()
 
 
@@ -263,3 +282,137 @@ class TestPathFurnitureInSlugs:
             "https://www.vijaysales.com/p/P237290/237287/"
             "samsung-galaxy-s25-5g-12gb-ram-256gb-storage-icyblue"
         ) == "samsung galaxy s25 5g 12gb ram 256gb storage icyblue"
+
+
+class TestCompressedSitemaps:
+    """``.xml.gz`` is not text, and must never be handled as though it were.
+
+    The old code asked the HTTP layer for a string and then tried to recover the
+    compressed bytes by re-encoding it through latin-1 with ``errors="ignore"``. That is
+    lossy by construction. It survived the small uncompressed sitemaps two retailers
+    publish and destroyed Flipkart's larger ones, so a bug in our decoding read as a fact
+    about Flipkart -- the store looked like it had no catalogue.
+    """
+
+    @pytest.fixture
+    def gzipped(self, monkeypatch: pytest.MonkeyPatch) -> Fetcher:
+        stub = Fetcher(
+            {
+                "https://shop.test/robots.txt": "Sitemap: https://shop.test/index.xml.gz",
+                "https://shop.test/index.xml.gz": INDEX.replace(
+                    "products-sitemap.xml", "products-sitemap.xml.gz"
+                ),
+                "https://shop.test/products-sitemap.xml.gz": PRODUCTS,
+            }
+        )
+        monkeypatch.setattr(sitemaps, "http_fetch", stub)
+        monkeypatch.setattr(sitemaps, "fetch_bytes", stub.as_bytes)
+        return stub
+
+    def test_a_gzipped_catalogue_is_read(self, gzipped: Fetcher) -> None:
+        urls = sitemaps.product_urls(
+            "gz", SPEC, PRODUCT_PATTERN, "https://shop.test/", CTX
+        )
+
+        assert len(urls) == 3
+        assert all("/p/" in url for url in urls)
+
+    def test_compression_is_detected_from_the_body_not_the_extension(self) -> None:
+        """Some sites serve ``.xml.gz`` already inflated, and some compress a plain
+        ``.xml``. The gzip header is the only reliable signal."""
+        assert gzip.compress(b"<urlset/>").startswith(sitemaps._GZIP_MAGIC)
+        assert not b"<urlset/>".startswith(sitemaps._GZIP_MAGIC)
+
+
+class TestSingleBrandStores:
+    """A maker's own site leaves its name out of its URLs.
+
+    Samsung files the Galaxy S25 at ``/in/smartphones/galaxy-s25/buy/`` -- no "samsung"
+    anywhere in it. A catalogue hit must match every word asked for, so "Samsung Galaxy
+    S25" matched two words of three and was discarded, on the one site certain to stock
+    it. Naming the brand in that store's own description fixes it without loosening the
+    rule for anyone else.
+    """
+
+    #: Samsung's real shape: the brand is in the domain, never in the path.
+    BRANDLESS = """<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://shop.test/in/smartphones/galaxy-s25/buy/</loc></url>
+  <url><loc>https://shop.test/in/smartphones/galaxy-s25-ultra/buy/</loc></url>
+</urlset>"""
+
+    @pytest.fixture
+    def catalogue(self, monkeypatch: pytest.MonkeyPatch) -> Fetcher:
+        stub = Fetcher(
+            {
+                "https://shop.test/robots.txt": "Sitemap: https://shop.test/products-sitemap.xml",
+                "https://shop.test/products-sitemap.xml": self.BRANDLESS,
+            }
+        )
+        monkeypatch.setattr(sitemaps, "http_fetch", stub)
+        monkeypatch.setattr(sitemaps, "fetch_bytes", stub.as_bytes)
+        return stub
+
+    def configure(self, monkeypatch: pytest.MonkeyPatch, brand: str) -> None:
+        import product_tracker.stores.search as search_module
+
+        monkeypatch.setattr(
+            search_module,
+            "load_search_config",
+            lambda slug: SearchConfig(
+                url_template="https://shop.test/search?q={query}",
+                result_link=(),
+                product_url_pattern="/buy/?$",
+                sitemap="auto",
+                sitemap_include="products-sitemap",
+                store_brand=brand,
+            ),
+        )
+
+    def test_the_brand_counts_as_present(
+        self, monkeypatch: pytest.MonkeyPatch, catalogue: Fetcher
+    ) -> None:
+        self.configure(monkeypatch, "Samsung")
+
+        result = SitemapSearch("brandshop").search("Samsung Galaxy S25", CTX, limit=5)
+
+        assert result.outcome is SearchOutcome.OK
+        assert [hit.title for hit in result.hits][:1] == ["Galaxy S25"]
+
+    def test_without_it_the_brand_is_a_missing_word(
+        self, monkeypatch: pytest.MonkeyPatch, catalogue: Fetcher
+    ) -> None:
+        """Exactly the bug: the shop guaranteed to stock it answers nothing."""
+        self.configure(monkeypatch, "")
+
+        result = SitemapSearch("brandless").search("Samsung Galaxy S25", CTX, limit=5)
+
+        assert result.outcome is SearchOutcome.NO_RESULTS
+
+    def test_a_query_without_the_brand_still_works(
+        self, monkeypatch: pytest.MonkeyPatch, catalogue: Fetcher
+    ) -> None:
+        self.configure(monkeypatch, "Samsung")
+
+        result = SitemapSearch("brandshop2").search("Galaxy S25", CTX, limit=5)
+
+        assert result.outcome is SearchOutcome.OK
+
+    def test_it_does_not_make_the_store_match_everything(
+        self, monkeypatch: pytest.MonkeyPatch, catalogue: Fetcher
+    ) -> None:
+        """A brand store stays silent about products it does not sell."""
+        self.configure(monkeypatch, "Samsung")
+
+        result = SitemapSearch("brandshop3").search("Samsung iPhone 17", CTX, limit=5)
+
+        assert result.outcome is SearchOutcome.NO_RESULTS
+
+
+def test_the_real_samsung_description_declares_its_brand() -> None:
+    """Guards the wiring, not the value: a renamed key would silently stop applying."""
+    from product_tracker.stores.search import load_search_config
+
+    assert load_search_config("samsung").store_brand == "Samsung"
+    # And must not collide with `brand`, which is a CSS selector for a card's maker text.
+    assert load_search_config("amazon-in").brand == ("h2",)

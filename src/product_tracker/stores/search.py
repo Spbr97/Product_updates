@@ -168,6 +168,13 @@ class SearchConfig:
     #: "http" (default), "auto" (HTTP first, render when unreadable), or "browser"
     #: (render straight away, for shops verified to publish nothing without JavaScript).
     render: str = "http"
+    #: The single brand this store sells, when it sells only one. A maker's own site
+    #: leaves its name out of its URLs -- Samsung files the Galaxy S25 at
+    #: ``/in/smartphones/galaxy-s25/buy/`` -- so a search for "Samsung Galaxy S25" matches
+    #: two words of three and is discarded, on the one site guaranteed to stock it. Set
+    #: this and the brand counts as present, which it demonstrably is. Distinct from
+    #: ``brand`` above, which is a CSS selector for where a *card* prints the maker.
+    store_brand: str = ""
     #: Where this store's sitemap lives. "" means "ask robots.txt"; "none" disables it.
     sitemap: str = ""
     #: Regex picking the product children out of a sitemap index, so we do not pull the
@@ -243,6 +250,7 @@ _KNOWN_KEYS = frozenset(
         "url",
         "product_url_pattern",
         "result_card",
+        "store_brand",
         "result_link",
         "render",
         "wait_for",
@@ -297,6 +305,7 @@ def load_search_config(slug: str) -> SearchConfig:
         price=_as_tuple(raw.get("price")),
         image=_as_tuple(raw.get("image")),
         result_card=raw.get("result_card"),
+        store_brand=str(raw.get("store_brand", "")),
         render=str(raw.get("render", "http")),
         sitemap=str(raw.get("sitemap", "")),
         sitemap_include=str(raw.get("sitemap_include", "product")),
@@ -571,7 +580,11 @@ class SitemapSearch(StoreSearch):
             words = sitemaps.slug_words(url)
             if not words:
                 continue
-            score, qualifiers = score_title(query, words)
+            # A single-brand shop does not repeat its own name in every URL, but every
+            # listing on it is still that brand's.
+            score, qualifiers = score_title(
+                query, f"{config.store_brand} {words}" if config.store_brand else words
+            )
             if score < 1.0:
                 # Every word asked for must appear. A sitemap has no relevance ranking of
                 # its own, so a partial match here is noise rather than a near miss.
@@ -708,11 +721,14 @@ class BrowseSearch(ConfiguredSearch):
     # --- Choosing which listing to read ------------------------------------------
 
     def _target(self, config: SearchConfig, query: str, ctx: FetchContext) -> str | None:
-        """The one browse page most likely to hold this product.
+        """The one browse page most likely to hold this product: its category *and* brand.
 
-        Category first, then brand. Falling back to the bare category listing is deliberate
-        but rarely available: shops publish "power banks" as a page of its own and phones
-        only per brand, which is why a phone query without a maker returns nothing here.
+        A brand is required, and falling back to the bare category listing would be worse
+        than answering nothing. Measured: "Galaxy S25" against the whole phones listing
+        paged four times and matched nothing, because a category page is ordered by the
+        shop's idea of popularity and a specific model can sit anywhere in several hundred
+        results. That is four requests spent to tell the user we could not find it. Naming
+        the maker turns the same query into one request and an answer.
         """
         urls = self._index(config, ctx)
         if not urls:
@@ -720,19 +736,13 @@ class BrowseSearch(ConfiguredSearch):
 
         prefix = config.browse_categories.get(self.category or "")
         if prefix:
-            narrowed = tuple(url for url in urls if prefix in url)
-            urls = narrowed or urls
+            urls = tuple(url for url in urls if prefix in url) or urls
 
         tokens = set(tokenise(query))
         for url in urls:
             brand = _BRAND_SEGMENT.search(url)
             if brand is not None and brand.group(1) in tokens:
                 return url
-
-        if prefix:
-            bare = tuple(url for url in urls if "~brand/" not in url)
-            if bare:
-                return bare[0]
         return None
 
     def _index(self, config: SearchConfig, ctx: FetchContext) -> tuple[str, ...]:
