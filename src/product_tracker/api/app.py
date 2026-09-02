@@ -41,7 +41,7 @@ def build_v1_router() -> APIRouter:
 
     Every versioned resource is mounted here.
     """
-    from .routers import alerts, groups, history, products, stores
+    from .routers import alerts, groups, history, products, search, stores
 
     # The read guard is attached once, here: every versioned route inherits it, so a new
     # router cannot be added and accidentally left unguarded. Write endpoints add their
@@ -52,6 +52,7 @@ def build_v1_router() -> APIRouter:
     router.include_router(alerts.router)
     router.include_router(stores.router)
     router.include_router(groups.router)
+    router.include_router(search.router)
     return router
 
 

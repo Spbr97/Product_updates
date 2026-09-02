@@ -230,6 +230,13 @@ uvicorn product_tracker.api.app:get_app --factory --reload
 - `/api/v1/alerts/{id}` — `GET` one, `DELETE` to remove.
 - `/api/v1/products/{id}/pause` and `/resume` — stop or restart scheduled checks.
 - `/api/v1/stores` — supported stores, from the adapter registry.
+- `/api/v1/search` — `POST` to find a product by name across every searchable shop,
+  without tracking anything. Returns ranked candidates plus the shops that could not
+  answer **and why** — a blocked retailer is reported as blocked, never as "no results".
+  Each candidate carries `is_exact` and `qualifiers` (`["fe"]`, `["pro"]`), which are
+  what separate a Galaxy S25 from a Galaxy S25 FE; a client that ignores them will
+  track the wrong phone. A `POST` on purpose: it is the one route that causes outbound
+  traffic to real shops, and the rate limiter exempts `GET`.
 
 `GET /health/ready` reports four dependencies: `database`, `scheduler`,
 `notifications`, and `auth`. Only the database gates readiness — an API that can serve
