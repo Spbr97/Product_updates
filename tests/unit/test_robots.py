@@ -136,3 +136,118 @@ class TestSearchHonoursIt:
         assert result.outcome is SearchOutcome.DISALLOWED
         # And crucially: no request was made.
         assert called == []
+
+
+class TestGroupsThatApplyToUs:
+    """Which rules apply, worked out here rather than left to the standard library.
+
+    Flipkart states its wildcard rules in eleven separate groups. RFC 9309 says groups
+    sharing a user-agent are merged; ``urllib.robotparser`` did so on Python 3.14 and did
+    not on 3.12. Byte-identical file, identical user agent, opposite answers -- and the
+    deployed image ran 3.12, so the permissive answer was the one that counted and the
+    tool fetched a path the site disallows.
+    """
+
+    def test_every_wildcard_group_applies(self) -> None:
+        body = "\n".join(
+            [
+                "User-agent: *",
+                "Disallow: /search?",
+                "",
+                "User-agent: *",
+                "Disallow: /ps/",
+                "",
+                "User-agent: *",
+                "Disallow: /reviews/",
+            ]
+        )
+        rules = robots.rules_for(body, "product-tracker-test")
+
+        assert "Disallow: /search?" in rules
+        assert "Disallow: /ps/" in rules  # the group a non-merging parser dropped
+        assert "Disallow: /reviews/" in rules
+
+    def test_a_group_naming_us_replaces_the_wildcard(self) -> None:
+        """"Most specific group wins" -- the wildcard is not also applied on top."""
+        body = "\n".join(
+            [
+                "User-agent: *",
+                "Disallow: /",
+                "",
+                "User-agent: product-tracker",
+                "Disallow: /admin/",
+            ]
+        )
+        rules = robots.rules_for(body, "product-tracker-test/1.0")
+
+        assert "Disallow: /admin/" in rules
+        assert "Disallow: /" not in rules
+
+    def test_consecutive_user_agent_lines_share_one_group(self) -> None:
+        body = "\n".join(
+            ["User-agent: googlebot", "User-agent: *", "Disallow: /private/"]
+        )
+        assert "Disallow: /private/" in robots.rules_for(body, "product-tracker-test")
+
+    def test_rules_for_other_agents_are_not_ours(self) -> None:
+        body = "\n".join(["User-agent: googlebot", "Disallow: /"])
+        rules = robots.rules_for(body, "product-tracker-test")
+
+        assert "Disallow: /" not in rules
+
+    def test_comments_and_non_rule_fields_are_ignored(self) -> None:
+        body = "\n".join(
+            [
+                "# a comment",
+                "User-agent: *",
+                "Crawl-delay: 10",
+                "Disallow: /search?   # inline comment",
+                "Sitemap: https://example.com/sitemap.xml",
+            ]
+        )
+        rules = robots.rules_for(body, "product-tracker-test")
+
+        assert rules == ["User-agent: *", "Disallow: /search?"]
+
+    def test_a_file_saying_nothing_about_us_permits_everything(self) -> None:
+        assert robots.rules_for("", "product-tracker-test") == ["User-agent: *"]
+
+
+class TestMergedRulesAreEnforced:
+    """The point of merging: the verdict must not depend on the interpreter."""
+
+    #: The shape of Flipkart's file -- the disallow that matters is not in the first group.
+    REPEATED = "\n".join(
+        [
+            "User-agent: *",
+            "Allow: /",
+            "",
+            "User-agent: *",
+            "Disallow: /search?",
+        ]
+    )
+
+    def test_a_disallow_in_a_later_group_is_honoured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            robots,
+            "http_fetch",
+            lambda url, ctx: FetchSuccess(
+                url=url, html=self.REPEATED, http_status=200
+            ),
+        )
+
+        assert not robots.is_allowed("https://shop.example.com/search?q=x", CTX)
+
+    def test_product_pages_stay_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Merging must not over-block: tracking a listing has to keep working."""
+        monkeypatch.setattr(
+            robots,
+            "http_fetch",
+            lambda url, ctx: FetchSuccess(
+                url=url, html=self.REPEATED, http_status=200
+            ),
+        )
+
+        assert robots.is_allowed("https://shop.example.com/p/itm123", CTX)

@@ -20,6 +20,19 @@ Two deliberate choices about scope:
 * **An unreadable robots.txt allows the request.** A 404 means no restrictions, and a site
   whose robots.txt is briefly failing has not thereby forbidden anything. This is logged
   rather than silent, because "we could not read their rules" is worth knowing.
+
+And one thing this must not delegate: **which rules apply to us.**
+
+Flipkart's robots.txt contains eleven separate ``User-agent: *`` groups. RFC 9309 section
+2.2.1 says groups with the same user-agent are to be merged, and ``urllib.robotparser``
+does not do so consistently across Python versions -- 3.14 merged them and refused
+``/search?``, 3.12 did not and permitted it. Byte-identical file, identical user agent,
+opposite answers. The deployed image runs 3.12, so the permissive answer was the one that
+counted, and the tool was fetching a path Flipkart asks crawlers not to touch -- which is
+precisely the failure described above, returning by a side door.
+
+So the groups that apply to us are merged here, into one, before the parser sees them.
+Then there is nothing for a parser to disagree about.
 """
 
 from __future__ import annotations
@@ -77,7 +90,7 @@ def _load(url: str, ctx: FetchContext) -> _Cached:
     response = http_fetch(target, ctx)
     if isinstance(response, FetchSuccess) and response.http_status == 200:
         parser = urllib.robotparser.RobotFileParser()
-        parser.parse(response.html.splitlines())
+        parser.parse(rules_for(response.html, ctx.user_agent))
         entry = _Cached(parser=parser, fetched_at=time.monotonic(), readable=True)
     else:
         # A 404 is the common case and means "no restrictions". Anything else means we
@@ -89,6 +102,66 @@ def _load(url: str, ctx: FetchContext) -> _Cached:
     with _LOCK:
         _CACHE[host] = entry
     return entry
+
+
+def _agent_matches(token: str, user_agent: str) -> bool:
+    """Whether a ``User-agent:`` token names us, by the convention robots.txt uses.
+
+    A token matches if it is the wildcard, or if it appears in our user agent string --
+    which is how every robots.txt parser reads it, ours included.
+    """
+    token = token.strip().lower()
+    return token == "*" or (bool(token) and token in user_agent.lower())
+
+
+def rules_for(body: str, user_agent: str) -> list[str]:
+    """Every rule that applies to ``user_agent``, merged into one group.
+
+    Two things this gets right that handing the raw file to ``RobotFileParser`` does not:
+
+    * **Repeated groups are merged.** A site may state its rules for ``*`` in eleven
+      separate blocks -- Flipkart does -- and all eleven apply. Which of them a parser
+      honours otherwise depends on the Python version.
+    * **A group naming us wins over the wildcard.** That is what "most specific group"
+      means in RFC 9309: if a site has written rules for our agent by name, its ``*``
+      rules are not also applied on top.
+
+    Returns lines, ready for ``RobotFileParser.parse``. A file with no group for us comes
+    back as an empty group, which permits everything -- the site said nothing about us.
+    """
+    named: list[str] = []
+    wildcard: list[str] = []
+    #: Agents of the group being read. Consecutive ``User-agent:`` lines share one group.
+    agents: list[str] = []
+    starting_group = True
+
+    for raw in body.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        field, _, value = line.partition(":")
+        field = field.strip().lower()
+        value = value.strip()
+
+        if field in {"user-agent", "useragent"}:
+            if not starting_group:
+                agents = []
+                starting_group = True
+            agents.append(value)
+            continue
+
+        if field not in {"allow", "disallow"}:
+            # Sitemap, Crawl-delay, Host: not rules about what may be fetched.
+            continue
+
+        starting_group = False
+        rule = f"{field.capitalize()}: {value}"
+        if any(a.strip() != "*" and _agent_matches(a, user_agent) for a in agents):
+            named.append(rule)
+        elif any(a.strip() == "*" for a in agents):
+            wildcard.append(rule)
+
+    return ["User-agent: *", *(named or wildcard)]
 
 
 def is_allowed(url: str, ctx: FetchContext) -> bool:
