@@ -98,6 +98,13 @@ class Settings(BaseSettings):
     )
     store_circuit_reset_seconds: int = Field(default=900, ge=30, le=86_400)
 
+    #: How many priceless search hits get their product page fetched so the result
+    #: carries a price. A catalogue lists URLs, not prices, so without this a search
+    #: across six shops shows prices for two of them -- which is not a comparison.
+    #: Each lookup is one paced request, so this is a direct trade of latency for
+    #: usefulness. Zero switches it off.
+    search_price_lookups: int = Field(default=5, ge=0, le=25)
+
     # --- Playwright -------------------------------------------------------------
     playwright_enabled: bool = True
     playwright_headless: bool = True

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache, lru_cache
 from pathlib import Path
 from typing import Any, ClassVar
@@ -78,6 +78,9 @@ ACCESSORY_WORDS: frozenset[str] = frozenset(
 DISQUALIFYING_WORDS: frozenset[str] = MODEL_QUALIFIERS | ACCESSORY_WORDS
 
 _TOKEN = re.compile(r"[a-z0-9]+")
+
+#: The maker in a browse URL: ``/mobiles/samsung~brand/pr?sid=tyy,4io``.
+_BRAND_SEGMENT = re.compile(r"/([a-z0-9-]+)~brand/")
 
 #: How a store's results may be fetched.
 _RENDER_MODES = frozenset({"http", "auto", "browser"})
@@ -174,6 +177,22 @@ class SearchConfig:
     #: What to wait for once rendered. Worth setting whenever the results have a known
     #: shape: it returns as soon as they exist instead of sleeping a fixed interval.
     wait_for: str | None = None
+
+    #: Sitemaps listing the store's own *browse* pages -- the category and brand listings
+    #: it publishes for crawlers. A third discovery route, for a shop whose search is
+    #: disallowed and whose product catalogue is too large to walk.
+    browse_sitemap: tuple[str, ...] = ()
+    #: Which URLs in those sitemaps are browse pages.
+    browse_url_pattern: str = ""
+    #: How deep to page into a browse listing. Browse pages are ordered by the shop's idea
+    #: of popularity, so a current model can sit behind older ones -- the Galaxy S25 was on
+    #: page two of Flipkart's Samsung listing. Paging stops early once an exact match is
+    #: found, so this is a ceiling and not a cost.
+    browse_max_pages: int = 3
+    #: Our product category -> the path prefix that store files it under. Without it a
+    #: query for a Samsung phone is as good a match for their monitor listing.
+    browse_categories: dict[str, str] = field(default_factory=dict)
+
     notes: str | None = None
 
     @property
@@ -183,6 +202,10 @@ class SearchConfig:
     @property
     def has_sitemap(self) -> bool:
         return self.sitemap.strip().lower() != "none"
+
+    @property
+    def has_browse(self) -> bool:
+        return bool(self.browse_sitemap and self.browse_url_pattern)
 
     def sitemap_spec(self) -> sitemaps.SitemapSpec:
         return sitemaps.SitemapSpec(
@@ -203,6 +226,17 @@ def _as_tuple(value: object) -> tuple[str, ...]:
     return (str(value),)
 
 
+def _as_mapping(filename: str, value: object) -> dict[str, str]:
+    """A category -> path-prefix table, or nothing. Never silently something else."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigurationError(
+            f"{filename}: browse_categories must be a mapping of category to path prefix"
+        )
+    return {str(key): str(item) for key, item in value.items()}
+
+
 #: Every key a search description may contain. Anything else is a mistake.
 _KNOWN_KEYS = frozenset(
     {
@@ -219,6 +253,10 @@ _KNOWN_KEYS = frozenset(
         "brand",
         "price",
         "image",
+        "browse_sitemap",
+        "browse_url_pattern",
+        "browse_max_pages",
+        "browse_categories",
         "notes",
     }
 )
@@ -264,6 +302,10 @@ def load_search_config(slug: str) -> SearchConfig:
         sitemap_include=str(raw.get("sitemap_include", "product")),
         sitemap_max_files=int(raw.get("sitemap_max_files", 20)),
         wait_for=raw.get("wait_for"),
+        browse_sitemap=_as_tuple(raw.get("browse_sitemap")),
+        browse_url_pattern=str(raw.get("browse_url_pattern", "")),
+        browse_max_pages=int(raw.get("browse_max_pages", 3)),
+        browse_categories=_as_mapping(path.name, raw.get("browse_categories")),
         notes=raw.get("notes"),
     )
 
@@ -556,3 +598,157 @@ class SitemapSearch(StoreSearch):
         return SearchResult(
             store_slug=self.slug, outcome=SearchOutcome.OK, hits=tuple(hits[:limit])
         )
+
+
+class BrowseSearch(ConfiguredSearch):
+    """Finds products on the category and brand listings a store publishes for crawlers.
+
+    The third discovery route, and the one for a shop that offers neither of the others.
+    Flipkart is the case it was written for: its robots.txt disallows ``/search?``, and its
+    product catalogue is roughly 275 million URLs across six thousand gzipped files, which
+    is a crawl measured in weeks rather than a way to look one product up. But it also
+    advertises two sitemaps of *browse* pages -- 24,388 category and brand listings that
+    robots.txt explicitly permits -- and those carry real titles and real prices.
+
+    Three things make this usable rather than merely possible:
+
+    * **A category and a brand narrow it to one page.** "Samsung Galaxy S25" is a phone
+      (our own category detection) made by Samsung (a token in the query that matches a
+      ``~brand`` segment), which is one listing out of 24,388. Without a brand there is
+      nothing to narrow to, and this says so instead of guessing.
+    * **Exact matches only.** A browse page is ordered by the shop's idea of popularity,
+      not by relevance to a question we never asked it, so a partial match here is noise
+      rather than a near miss. The same reasoning ``SitemapSearch`` uses.
+    * **Paging stops the moment an exact match appears.** Measured, not assumed: the
+      Galaxy S25 was not on page one of Flipkart's Samsung phone listing. It was on page
+      two, behind older models.
+    """
+
+    def __init__(self, slug: str, category: str | None = None) -> None:
+        super().__init__(slug)
+        #: Our own product category for the query, supplied by the caller. The stores
+        #: layer must not reach into services to work it out for itself.
+        self.category = category
+
+    def search(
+        self,
+        query: str,
+        ctx: FetchContext,
+        *,
+        limit: int = 10,
+        use_browser: bool = False,
+    ) -> SearchResult:
+        config = self.config
+        if not config.has_browse:
+            return SearchResult.failure(
+                self.slug, SearchOutcome.UNSUPPORTED, "no browse pages configured for this store"
+            )
+
+        target = self._target(config, query, ctx)
+        if target is None:
+            return SearchResult.failure(
+                self.slug,
+                SearchOutcome.NO_RESULTS,
+                "this store publishes its listings by brand, and the query names no brand "
+                "it lists. Naming the maker -- 'Samsung Galaxy S25' rather than "
+                "'Galaxy S25' -- lets it be searched.",
+            )
+
+        if not robots.is_allowed(target, ctx):
+            return SearchResult.failure(
+                self.slug,
+                SearchOutcome.DISALLOWED,
+                "this store's robots.txt asks crawlers not to fetch its listing pages.",
+            )
+
+        hits: list[SearchHit] = []
+        seen: set[str] = set()
+        pages = 0
+        for page in range(1, max(1, config.browse_max_pages) + 1):
+            url = target if page == 1 else f"{target}&page={page}"
+            response = http_fetch(url, ctx)
+            if not isinstance(response, FetchSuccess):
+                break
+            pages += 1
+            for hit in self._parse(response, config, query, limit=limit * 8):
+                if hit.score < 1.0 or hit.url in seen:
+                    continue
+                seen.add(hit.url)
+                hits.append(hit)
+            if hits:
+                # Found what was asked for. Paging further would cost the shop requests
+                # to rank products nobody asked about.
+                break
+
+        log.info(
+            "search.browse",
+            store=self.slug,
+            url_host=host_of(target),
+            pages=pages,
+            hits=len(hits),
+        )
+        if not pages:
+            return SearchResult.failure(
+                self.slug,
+                SearchOutcome.PAGE_STRUCTURE,
+                "the store's listing pages could not be read, so its catalogue was not searched",
+            )
+        if not hits:
+            return SearchResult(
+                store_slug=self.slug,
+                outcome=SearchOutcome.NO_RESULTS,
+                message=f"nothing matching in the first {pages} page(s) of that listing",
+            )
+
+        hits.sort(key=lambda hit: (len(hit.qualifiers), len(hit.title)))
+        return SearchResult(
+            store_slug=self.slug, outcome=SearchOutcome.OK, hits=tuple(hits[:limit])
+        )
+
+    # --- Choosing which listing to read ------------------------------------------
+
+    def _target(self, config: SearchConfig, query: str, ctx: FetchContext) -> str | None:
+        """The one browse page most likely to hold this product.
+
+        Category first, then brand. Falling back to the bare category listing is deliberate
+        but rarely available: shops publish "power banks" as a page of its own and phones
+        only per brand, which is why a phone query without a maker returns nothing here.
+        """
+        urls = self._index(config, ctx)
+        if not urls:
+            return None
+
+        prefix = config.browse_categories.get(self.category or "")
+        if prefix:
+            narrowed = tuple(url for url in urls if prefix in url)
+            urls = narrowed or urls
+
+        tokens = set(tokenise(query))
+        for url in urls:
+            brand = _BRAND_SEGMENT.search(url)
+            if brand is not None and brand.group(1) in tokens:
+                return url
+
+        if prefix:
+            bare = tuple(url for url in urls if "~brand/" not in url)
+            if bare:
+                return bare[0]
+        return None
+
+    def _index(self, config: SearchConfig, ctx: FetchContext) -> tuple[str, ...]:
+        """Every browse URL the store advertises, cached on disk like any other sitemap."""
+        collected: list[str] = []
+        for number, sitemap_url in enumerate(config.browse_sitemap):
+            spec = sitemaps.SitemapSpec(index_url=sitemap_url, include="", max_files=1)
+            collected.extend(
+                sitemaps.product_urls(
+                    f"{self.slug}-browse-{number}",
+                    spec,
+                    config.browse_url_pattern,
+                    sitemap_url,
+                    ctx,
+                )
+            )
+        # Localised duplicates of the same listing answer the same question in a language
+        # we did not ask in, and would be picked ahead of the original on ordering alone.
+        return tuple(url for url in dict.fromkeys(collected) if "/hi/" not in url)

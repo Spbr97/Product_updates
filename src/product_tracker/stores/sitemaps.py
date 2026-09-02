@@ -230,6 +230,15 @@ def _collect(
     return tuple(collected[:MAX_URLS])
 
 
+#: Path segments that are furniture rather than description. Samsung ends every product
+#: page with ``/buy/``, so without this the readable part of
+#: ``/in/smartphones/galaxy-s25/buy/`` is the word "buy" -- and every Samsung product
+#: scores zero against every query. No real product slug is one of these words.
+_NON_DESCRIPTIVE_SEGMENTS: frozenset[str] = frozenset(
+    {"buy", "buys", "product", "products", "item", "items", "detail", "details", "index"}
+)
+
+
 def slug_words(url: str) -> str:
     """The readable part of a product URL, as words.
 
@@ -241,9 +250,12 @@ def slug_words(url: str) -> str:
     segments = [s for s in path.split("/") if s]
     if not segments:
         return ""
-    # The last segment that is not purely an id carries the description.
+    # The last segment that is not purely an id, and not path furniture, carries the
+    # description.
     for segment in reversed(segments):
-        if not segment.isdigit() and re.search(r"[a-z]{3}", segment, re.IGNORECASE):
+        if segment.isdigit() or segment.lower() in _NON_DESCRIPTIVE_SEGMENTS:
+            continue
+        if re.search(r"[a-z]{3}", segment, re.IGNORECASE):
             return re.sub(r"[-_+]+", " ", segment).strip()
     return re.sub(r"[-_+]+", " ", segments[-1]).strip()
 

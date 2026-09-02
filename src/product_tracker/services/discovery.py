@@ -14,7 +14,7 @@ candidates come back with their score and their qualifiers, and a person -- or a
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 
 from ..core.config import Settings
@@ -22,9 +22,11 @@ from ..core.logging import get_logger
 from ..domain.enums import SearchOutcome
 from ..domain.models import CheckGuard, FetchContext, SearchHit, SearchResult
 from ..scheduler.throttle import build_guard
-from ..stores import browser
+from ..stores import browser, robots
 from ..stores.catalogue import KNOWN_STORES
+from ..stores.registry import StoreRegistry, default_registry
 from ..stores.search import (
+    BrowseSearch,
     SearchConfig,
     SitemapSearch,
     available_searches,
@@ -32,6 +34,8 @@ from ..stores.search import (
     search_for,
 )
 from ..utils.urls import host_of
+from .query_policy import require_specific
+from .specs import detect_category
 
 log = get_logger(__name__)
 
@@ -124,6 +128,11 @@ def discover(
     retailer never costs the others their answers -- the same contract product checks hold
     themselves to.
     """
+    # Before a single request leaves the machine. A query that names a category rather
+    # than a product cannot be answered by any of these routes -- see ``query_policy`` --
+    # and fanning it out to every shop would spend their patience to return noise.
+    require_specific(query)
+
     targets = store_slugs if store_slugs is not None else searchable_stores()
     # Paced by default, not only when a caller remembers to ask. Search fans out across
     # every shop and can run several passes, and an unthrottled fan-out is how this tool
@@ -167,6 +176,22 @@ def discover(
         results.update(_sitemap_pass(catalogues, query, ctx, limit_per_store, guard))
         discovery = Discovery(query=query, results=tuple(results.values()))
 
+    # Then the browse listings, for a shop that has neither a searchable results page nor
+    # a walkable catalogue. Flipkart is the whole reason this pass exists: its search is
+    # disallowed and its product sitemap is 275 million URLs, but the category and brand
+    # listings it publishes for crawlers carry titles and prices.
+    browsable = _worth_browsing(results)
+    if browsable:
+        results.update(_browse_pass(browsable, query, ctx, limit_per_store, guard))
+        discovery = Discovery(query=query, results=tuple(results.values()))
+
+    # Finally, prices. A catalogue publishes URLs and nothing else, so up to this point
+    # every hit from a shop whose search we may not crawl has come back priceless -- and a
+    # price comparison whose rows say "(no price)" for four shops out of six has not
+    # compared anything. This fetches the product pages of the best few, which is the same
+    # request a tracked listing's check makes.
+    discovery = _with_prices(discovery, ctx, settings, guard)
+
     log.info(
         "discovery.completed",
         query_length=len(query),
@@ -175,6 +200,126 @@ def discover(
         exact=len(discovery.exact),
     )
     return discovery
+
+
+def _with_prices(
+    discovery: Discovery, ctx: FetchContext, settings: Settings, guard: CheckGuard | None
+) -> Discovery:
+    """Fill in prices for the best hits that arrived without one.
+
+    Bounded by ``search_price_lookups`` and taken in rank order, because the point is to
+    make the *answer* comparable, not to price a whole catalogue. Each lookup is paced by
+    the same guard as everything else, and asks robots.txt first: these URLs came from a
+    catalogue we chose to read, not from a person handing us a link.
+
+    A lookup that fails changes nothing. The hit keeps its derived title and its absent
+    price, and stays marked ``from_sitemap`` -- an unreadable page is not evidence about
+    what a shop charges, and must not be recorded as one.
+    """
+    budget = settings.search_price_lookups
+    if budget <= 0:
+        return discovery
+
+    wanted = [hit for hit in discovery.hits if hit.price is None][:budget]
+    if not wanted:
+        return discovery
+
+    registry = default_registry()
+    priced: dict[str, SearchHit] = {}
+    for hit in wanted:
+        if not robots.is_allowed(hit.url, ctx):
+            continue
+        outcome = _guarded(
+            hit.store_slug, guard, partial(_price_one, registry, hit, ctx)
+        )
+        if outcome.hits:
+            priced[hit.url] = outcome.hits[0]
+
+    if not priced:
+        return discovery
+
+    log.info("discovery.priced", looked_up=len(wanted), found=len(priced))
+    return Discovery(
+        query=discovery.query,
+        results=tuple(
+            replace(result, hits=tuple(priced.get(hit.url, hit) for hit in result.hits))
+            for result in discovery.results
+        ),
+    )
+
+
+def _worth_browsing(results: dict[str, SearchResult]) -> tuple[str, ...]:
+    """Stores still unanswered that publish browse listings.
+
+    Last of the three routes because it is the most expensive: a listing page is large,
+    ordered by the shop rather than by our question, and may need paging. It runs only
+    where the cheaper routes have already failed.
+    """
+    candidates: list[str] = []
+    for slug, result in results.items():
+        if result.succeeded:
+            continue
+        config = _render_mode(slug)
+        if config is not None and config.has_browse:
+            candidates.append(slug)
+    return tuple(candidates)
+
+
+def _browse_pass(
+    slugs: tuple[str, ...],
+    query: str,
+    ctx: FetchContext,
+    limit: int,
+    guard: CheckGuard | None = None,
+) -> dict[str, SearchResult]:
+    """Read each store's own category listing for the product.
+
+    The category is worked out here rather than in the stores layer, which must not reach
+    up into services to do it. A shop files a phone and a power bank in different places,
+    and picking the wrong one is how a query for a Samsung phone matches their monitors.
+    """
+    category = detect_category(query)
+    log.info("discovery.browse_pass", stores=len(slugs), category=category)
+    found: dict[str, SearchResult] = {}
+    for slug in slugs:
+        result = _guarded(
+            slug,
+            guard,
+            partial(BrowseSearch(slug, category).search, query, ctx, limit=limit),
+        )
+        if result.succeeded:
+            found[slug] = result
+    return found
+
+
+def _price_one(registry: StoreRegistry, hit: SearchHit, ctx: FetchContext) -> SearchResult:
+    """One product-page fetch, expressed as a SearchResult so the guard can pace it.
+
+    The title is replaced too when the page publishes one. A catalogue title is derived
+    from the URL slug; the page's own title is what the shop actually calls the product,
+    so ``from_sitemap`` is cleared only when a real title arrives with the price.
+    """
+    fetched = registry.resolve(hit.url).fetch_product(hit.url, ctx)
+    price = getattr(fetched, "price", None)
+    if price is None:
+        return SearchResult.failure(
+            hit.store_slug, SearchOutcome.PAGE_STRUCTURE, "no price on the product page"
+        )
+
+    published = (getattr(fetched, "name", None) or "").strip()
+    return SearchResult(
+        store_slug=hit.store_slug,
+        outcome=SearchOutcome.OK,
+        hits=(
+            replace(
+                hit,
+                price=price,
+                currency=getattr(fetched, "currency", None) or hit.currency or "INR",
+                title=published or hit.title,
+                from_sitemap=not published,
+            ),
+        ),
+    )
 
 
 #: Outcomes that say something about us rather than about the shop.

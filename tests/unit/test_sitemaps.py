@@ -230,3 +230,36 @@ class TestSitemapSearch:
         )
         result = SitemapSearch("shop").search("Galaxy S25", CTX)
         assert result.outcome is SearchOutcome.UNSUPPORTED
+
+
+class TestPathFurnitureInSlugs:
+    """Samsung ends every product URL with ``/buy/``.
+
+    Without skipping it, the readable part of ``/in/smartphones/galaxy-s25/buy/`` is the
+    word "buy", every Samsung product scores zero against every query, and the store looks
+    like it stocks nothing.
+    """
+
+    def test_a_trailing_buy_segment_is_skipped(self) -> None:
+        from product_tracker.stores.sitemaps import slug_words
+
+        assert slug_words("https://www.samsung.com/in/smartphones/galaxy-s25/buy/") == (
+            "galaxy s25"
+        )
+
+    def test_the_derived_title_reads_as_a_product(self) -> None:
+        from product_tracker.stores.sitemaps import title_from_slug
+
+        assert (
+            title_from_slug("https://www.samsung.com/in/audio-sound/galaxy-buds4-pro/buy/")
+            == "Galaxy Buds4 Pro"
+        )
+
+    def test_ordinary_slugs_are_unchanged(self) -> None:
+        """The stores that already worked must keep working."""
+        from product_tracker.stores.sitemaps import slug_words
+
+        assert slug_words(
+            "https://www.vijaysales.com/p/P237290/237287/"
+            "samsung-galaxy-s25-5g-12gb-ram-256gb-storage-icyblue"
+        ) == "samsung galaxy s25 5g 12gb ram 256gb storage icyblue"

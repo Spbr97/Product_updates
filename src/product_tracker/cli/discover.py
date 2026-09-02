@@ -102,9 +102,15 @@ def search(
     stores = (store,) if store else None
     if browser:
         info("searching... (JavaScript shops are rendered only if this finds nothing)")
-    found = discovery.discover(
-        query, settings, store_slugs=stores, limit_per_store=limit, allow_browser=browser
-    )
+    try:
+        found = discovery.discover(
+            query, settings, store_slugs=stores, limit_per_store=limit, allow_browser=browser
+        )
+    except ValidationError as exc:
+        # A query naming a category rather than a product. Refused before any shop is
+        # contacted, with the reason, because there is a better tool for that job.
+        error(str(exc))
+        raise typer.Exit(ExitCode.ERROR) from exc
 
     if found.hits:
         stdout.print()
@@ -151,9 +157,13 @@ def track(
 ) -> None:
     """Find a product across shops and track the listings you confirm."""
     settings = get_settings()
-    found = discovery.discover(
-        query, settings, limit_per_store=limit, allow_browser=browser
-    )
+    try:
+        found = discovery.discover(
+            query, settings, limit_per_store=limit, allow_browser=browser
+        )
+    except ValidationError as exc:
+        error(str(exc))
+        raise typer.Exit(ExitCode.ERROR) from exc
 
     candidates = found.best_per_store(exact_only=not include_near)
     if not candidates:

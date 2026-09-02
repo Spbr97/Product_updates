@@ -1,0 +1,45 @@
+# Samsung India.
+#
+# Their robots.txt says `Disallow: /*/search/`, so their search is never fetched and the
+# store reports DISALLOWED. Discovery is through the sitemap they advertise, which is the
+# route they publish for exactly this.
+#
+# Verified 2026-09-02:
+#
+#   * https://www.samsung.com/robots.txt advertises 94 locale sitemaps; the Indian one is
+#     https://www.samsung.com/in/sitemap.xml, a small index of seven children.
+#   * `top_sitemap.xml` holds 300 URLs, 28 of them consumer `/buy/` pages, and fetches in
+#     under a second. No gzip, no crawling of thousands of files.
+#   * Those `/buy/` pages give a price to the *existing generic adapter* with no browser:
+#     galaxy-s25/buy/ -> Rs 84,999 in stock, galaxy-buds4-pro/buy/ -> Rs 22,999 in stock.
+#
+# Deliberately NOT the business catalogue. `business/b2b-sitemap.xml` lists 340 product
+# pages with far better coverage -- every colour and capacity, with SKU codes -- and not
+# one of them carries a price in its HTML. Better twenty-eight listings that can be
+# compared than three hundred that cannot.
+#
+# This is a brand store: it sells Samsung and nothing else, and only current models. It
+# will answer "Galaxy S25" and stay silent on "iPhone 17", which is correct, not a fault.
+
+url: "https://www.samsung.com/in/search/?searchvalue={query}"
+
+# Consumer product pages all end this way. The pattern is what keeps the other 272 URLs in
+# top_sitemap.xml -- category pages, offers, support -- out of the results.
+product_url_pattern: "/buy/?$"
+
+sitemap: "https://www.samsung.com/in/sitemap.xml"
+# Matches /in/top_sitemap.xml and /in/support/top_sitemap.xml. The business children are
+# excluded on purpose; see above.
+sitemap_include: "top_sitemap"
+sitemap_max_files: 3
+
+# Never reached -- the search URL is disallowed -- but kept so the file describes the store
+# rather than just its sitemap, and so that if Samsung ever permits search this is all that
+# would need checking.
+result_card: "div.pd-g-product-card"
+result_link:
+  - "a[href*='/buy/']"
+title:
+  - "div.pd-g-product-card__name"
+price:
+  - "span.pd-g-product-card__price"

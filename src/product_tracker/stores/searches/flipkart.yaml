@@ -22,6 +22,39 @@ url: "https://www.flipkart.com/search?q={query}"
 # confident absence.
 sitemap: "none"
 
+# The third route, and the one that actually works here. Flipkart advertises two sitemaps
+# of *browse* pages -- category and brand listings -- which robots.txt permits and which,
+# unlike a product sitemap, carry titles and prices. Verified 2026-09-02: 24,388 English
+# listings, 5,801 distinct brands, and the selectors below parse them unchanged because a
+# browse page and a results page are built from the same card.
+#
+# The catch, measured rather than assumed: these pages are ordered by Flipkart's idea of
+# popularity. The Galaxy S25 was not on page one of the Samsung phone listing; it was on
+# page two, behind a Galaxy S24 and an M06. Hence browse_max_pages, and hence the early
+# stop as soon as an exact match appears.
+# NOT ENABLED YET, and the reason is one line of plumbing rather than anything about
+# Flipkart. `sitemaps._fetch_xml` recovers gzip bytes by re-encoding an already-decoded
+# string through latin-1 with errors="ignore". That survives the small uncompressed
+# sitemaps Vijay Sales and Reliance publish and destroys these two, which fail to inflate
+# ("sitemap.gunzip_failed"). The fix is a bytes-returning fetch path in stores/http.py;
+# until then, enabling these keys would make Flipkart report "names no brand it lists"
+# for every query, which blames the query for our own bug.
+#
+# To finish: add a bytes fetch, restore the two keys below, and the rest is verified.
+# browse_sitemap:
+#   - "https://www.flipkart.com/sitemap_v_view-browse.xml.gz"
+#   - "https://www.flipkart.com/sitemap_s_store-browse.xml.gz"
+
+browse_url_pattern: '/pr\?sid='
+browse_max_pages: 4
+
+# Our product categories -> where this shop files them. Without this, a Samsung phone
+# query matches their Samsung monitor listing just as well.
+browse_categories:
+  phone: "/mobiles/"
+  earbuds: "/audio-video/headset/"
+  powerbank: "/mobile-accessories/power-banks/"
+
 product_url_pattern: "/p/itm"
 
 # The anchor wraps the whole result, title and price included.
