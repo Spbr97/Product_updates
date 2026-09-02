@@ -25,6 +25,7 @@ from ..repositories.groups import GroupRepository, VariantRepository
 from ..repositories.products import ProductRepository
 from . import specs
 from .specs import detect_category
+from .user_service import exempt_from_quota
 from .variants import infer_variant, infer_variant_from_url, sort_position, variant_label
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -60,7 +61,7 @@ def create_group(
 
     repo = GroupRepository(session)
     limit = (settings or get_settings()).max_groups_per_user
-    if len(repo.list_all(user_id)) >= limit:
+    if not exempt_from_quota(session, user_id) and len(repo.list_all(user_id)) >= limit:
         raise QuotaExceededError("product groups", limit)
 
     # Uniqueness is per user: two people may each keep an "iphone-17".

@@ -178,6 +178,22 @@ def subscribe(session: Session, user_id: int, product_id: int) -> Subscription:
     return repo.add(Subscription(user_id=user_id, product_id=product_id))
 
 
+def exempt_from_quota(session: Session, user_id: int) -> bool:
+    """Whether this account is outside the per-account ceilings.
+
+    Admins are, and that is the whole of what ``is_admin`` means. It is worth being precise
+    about why, because the flag sounds like more than it is: quotas exist so one *user*
+    cannot monopolise a shared deployment and get its address blocked by a retailer. They
+    are a courtesy ceiling, not a security boundary -- what actually protects a shop is the
+    shared pacing in ``scheduler/throttle.py``, which no account is exempt from.
+
+    The operator running the tool is on the other side of that concern, and can raise the
+    limits in configuration anyway, so capping them buys nothing.
+    """
+    user = UserRepository(session).get(user_id)
+    return bool(user is not None and user.is_admin)
+
+
 def assert_subscribed(session: Session, user_id: int, product_id: int) -> None:
     """Refuse a listing this user does not watch, as though it did not exist.
 

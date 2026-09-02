@@ -22,7 +22,12 @@ from ..repositories.users import SubscriptionRepository
 from ..stores.catalogue import resolve_store
 from ..stores.registry import StoreRegistry
 from ..utils.urls import canonicalize_url, host_of, validate_url
-from .user_service import assert_subscribed, default_user, unsubscribe
+from .user_service import (
+    assert_subscribed,
+    default_user,
+    exempt_from_quota,
+    unsubscribe,
+)
 
 log = get_logger(__name__)
 
@@ -75,10 +80,18 @@ class ProductService:
         canonical = canonicalize_url(validated)
 
         existing = self.products.get_by_canonical_url(canonical)
+        owner = self._owner_id()
+        if existing is not None and self.subscriptions.is_subscribed(owner, existing.id):
+            # Already watching it. A duplicate rather than a quota problem, because it is
+            # one -- and it adds nothing to what this account watches.
+            raise DuplicateError("Product", canonical)
+
+        # Before either branch below. Checking only when creating a *new* row left the
+        # ceiling trivially avoidable: let somebody else add the listing, then subscribe to
+        # it for free. The quota is on what an account watches, not on what it created.
+        self._check_quota()
+
         if existing is not None:
-            owner = self._owner_id()
-            if self.subscriptions.is_subscribed(owner, existing.id):
-                raise DuplicateError("Product", canonical)
             # Somebody else already tracks it: join them on the same row.
             self._subscribe(existing)
             log.info("product.subscribed", product_id=existing.id, user_id=owner)
@@ -86,8 +99,6 @@ class ProductService:
 
         # Two separate questions: which retailer is this (by domain), and which adapter
         # reads it. Several named stores share the generic adapter.
-        self._check_quota()
-
         store_info = resolve_store(validated)
         adapter = self.registry.resolve(validated)
         store = self._store_row(store_info.slug)
@@ -118,8 +129,12 @@ class ProductService:
         tracks costs a retailer nothing extra, but it still counts towards the ceiling, so
         the count is of subscriptions rather than of rows this user created.
         """
+        owner = self._owner_id()
+        if exempt_from_quota(self.session, owner):
+            return
+
         limit = self.settings.max_listings_per_user
-        watching = len(self.subscriptions.product_ids_for(self._owner_id()))
+        watching = len(self.subscriptions.product_ids_for(owner))
         if watching >= limit:
             raise QuotaExceededError("tracked listings", limit)
 

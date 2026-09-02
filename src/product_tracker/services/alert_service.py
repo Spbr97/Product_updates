@@ -26,7 +26,7 @@ from ..repositories.products import ProductRepository
 from ..repositories.rules import TrackingRuleRepository
 from ..repositories.users import SubscriptionRepository
 from .rules_engine import RULE_EVALUATORS, validate_params
-from .user_service import assert_subscribed
+from .user_service import assert_subscribed, exempt_from_quota
 
 log = get_logger(__name__)
 
@@ -75,7 +75,10 @@ class AlertService:
         assert_subscribed(self.session, self.user_id, product_id)
 
         limit = (self.settings or get_settings()).max_alerts_per_user
-        if self.rules.count_filtered(user_id=self.user_id) >= limit:
+        if (
+            not exempt_from_quota(self.session, self.user_id)
+            and self.rules.count_filtered(user_id=self.user_id) >= limit
+        ):
             raise QuotaExceededError("alert rules", limit)
 
         if rule_type not in RULE_EVALUATORS:
