@@ -46,9 +46,17 @@ Amazon or Slack is a new file rather than an edit to the core.
 
 The web UI is deliberately outside the Python process's logic: `frontend/` builds to static
 files, `web/serve.py` mounts them at `/ui`, and the browser calls `/api/v1` like any other
-client. The eight-state listing resolver and the retailer-field rules live in TypeScript
-with a Vitest suite; the Python side only checks the bundle is served. Keeping the UI a
-separate build means it can grow — or be replaced — without touching the API.
+client. The nine-state listing resolver, the comparison-cell resolver and the
+retailer-field rules live in TypeScript with a Vitest suite; the Python side only checks
+the bundle is served. Keeping the UI a separate build means it can grow — or be replaced —
+without touching the API.
+
+Both resolvers exist for the same reason, and it is the reason the whole project exists:
+several distinct situations produce "no price", and a UI that renders them identically
+undoes in CSS what the data model went to some trouble to keep apart. `listingState.ts`
+does this for a shop panel, `cellState.ts` for a grid square. A blank cell is the most
+tempting and the most dishonest rendering, because in a row of prices it reads as
+"nothing to see here" — which is the one thing it never means.
 
 ### Why `domain/models.py` and `db/models.py` both exist
 

@@ -211,30 +211,6 @@ class NotificationService:
         """
         return sum(1 for match in matches if self.record(match, when=when) is not None)
 
-    def dispatch(self, matches: list[RuleMatch], *, when: datetime | None = None) -> DeliveryReport:
-        """Record and deliver in one go.
-
-        Convenient for tests and one-off scripts. Production paths use ``record_all``
-        followed by ``deliver_pending`` so that delivery is outside the check's
-        transaction.
-        """
-        created = sent = failed = suppressed = 0
-
-        for match in matches:
-            notification = self.record(match, when=when)
-            if notification is None:
-                suppressed += 1
-                continue
-            created += 1
-            if self.deliver(notification):
-                sent += 1
-            else:
-                failed += 1
-
-        return DeliveryReport(
-            created=created, sent=sent, failed=failed, suppressed=suppressed
-        )
-
     def deliver_pending(
         self,
         *,

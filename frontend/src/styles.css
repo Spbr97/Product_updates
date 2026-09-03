@@ -134,9 +134,6 @@ legend { padding: 0 6px; font-weight: 600; color: var(--ink-soft); }
 .badge.good { background: var(--good-bg); color: var(--good); }
 .badge.muted { background: var(--bg); color: var(--ink-soft); }
 
-.spinner { display: none; font-size: 0.84rem; color: var(--ink-soft); }
-.htmx-request .spinner, .spinner.htmx-request { display: inline; }
-
 /* --- state filter chips ----------------------------------------------------------
    The tone is carried by the text, not a filled background: a row of solid colour
    reads as a set of warnings, and most of these states are not warnings. The pressed
@@ -178,8 +175,6 @@ td.best { font-weight: 650; color: var(--good); }
 .stats div { display: flex; flex-direction: column; }
 .stats dt { color: var(--ink-soft); font-size: 0.8rem; }
 .stats dd { margin: 0; font-weight: 600; }
-.rules { margin: 4px 0 12px; padding-left: 18px; }
-.rules li { margin: 3px 0; }
 code { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 0.86em; }
 
 /* --- comparison grid -------------------------------------------------------------- */
