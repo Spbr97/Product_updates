@@ -18,7 +18,11 @@ from decimal import Decimal
 import pytest
 
 from product_tracker.domain.enums import Availability, FetchMethod, FetchOutcome
-from product_tracker.domain.models import FetchContext, FetchResult
+from product_tracker.domain.models import (
+    RETRACTS_AVAILABILITY,
+    FetchContext,
+    FetchResult,
+)
 from product_tracker.stores import pincode
 
 WITH_PIN = FetchContext(delivery_pincode="560037")
@@ -273,6 +277,31 @@ class TestStockGatedShops:
         escalated = pincode.escalate(BLINKIT, WITHOUT_PIN, unavailable)
 
         assert escalated.availability is Availability.UNKNOWN
+
+    def test_it_marks_the_stored_reading_for_retraction(self) -> None:
+        """Forcing this result to UNKNOWN is only half the job.
+
+        The engine leaves known fields alone on a non-success, so without an explicit
+        retraction the correction is one-way: new false readings stop, and every one
+        already on a product stays there for good. Product 21 in the live database was
+        exactly that -- reading "out of stock" from a check we had already disproved.
+        """
+        sold_out = FetchResult(
+            outcome=FetchOutcome.OUT_OF_STOCK,
+            availability=Availability.OUT_OF_STOCK,
+            fetch_method=FetchMethod.HTTP,
+        )
+
+        escalated = pincode.escalate(BLINKIT, WITHOUT_PIN, sold_out)
+
+        assert escalated.raw_metadata[RETRACTS_AVAILABILITY] is True
+
+    def test_nothing_else_is_ever_marked_for_retraction(self) -> None:
+        """Retraction erases a stored reading, so it must stay confined to the one case
+        that disproves one. A price miss learned nothing about stock."""
+        for url in (AMAZON, SAMSUNG, UNKNOWN):
+            escalated = pincode.escalate(url, WITH_PIN, no_price())
+            assert RETRACTS_AVAILABILITY not in escalated.raw_metadata, url
 
     def test_a_real_price_from_a_stock_gated_shop_still_stands(self) -> None:
         """If it quoted us a price, it decided we were somewhere it delivers."""

@@ -42,7 +42,7 @@ from dataclasses import dataclass, replace
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ..domain.enums import Availability, FetchOutcome
-from ..domain.models import FetchContext, FetchResult
+from ..domain.models import RETRACTS_AVAILABILITY, FetchContext, FetchResult
 from ..utils.urls import host_of
 
 
@@ -212,6 +212,13 @@ def escalate(url: str, ctx: FetchContext, result: FetchResult) -> FetchResult:
             result,
             outcome=FetchOutcome.NEEDS_LOCATION,
             availability=Availability.UNKNOWN,
+            # This is not "we failed to learn anything" -- it is a positive finding that
+            # whatever this shop previously told us about stock was an artefact of an
+            # address we never gave. So the engine is told it may *retract* the stored
+            # reading, which it otherwise never does for a non-success. Without this the
+            # correction is one-way: new false readings stop, and every one already
+            # recorded stays on the product for good.
+            raw_metadata={**result.raw_metadata, RETRACTS_AVAILABILITY: True},
             message=(
                 "the page says this is not available, but this shop stocks nothing at all "
                 "until a delivery area is set, and none could be -- so this is recorded as "

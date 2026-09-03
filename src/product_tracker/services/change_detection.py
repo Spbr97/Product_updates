@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from ..domain.enums import Availability
-from ..domain.models import FetchResult
+from ..domain.models import RETRACTS_AVAILABILITY, FetchResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +105,22 @@ def detect_availability_change(
     Only successful checks contribute. A failed fetch reports ``UNKNOWN`` because it
     learned nothing, and writing that would falsely record a transition into "unknown"
     every time the network hiccupped -- and back out again on the next success.
+
+    The single exception is a *retraction*: a result that does not merely fail to read an
+    availability but positively establishes that the one on record was never about the
+    product (see :mod:`product_tracker.stores.pincode`). That is something learned, and
+    the transition out of a false reading is exactly what history should show -- otherwise
+    the shop's mistaken "out of stock" stands as the last word for ever.
     """
+    if result.raw_metadata.get(RETRACTS_AVAILABILITY):
+        differs = previous is not None and previous is not Availability.UNKNOWN
+        return AvailabilityOutcome(
+            should_record=differs,
+            changed=differs,
+            previous=previous,
+            current=Availability.UNKNOWN,
+        )
+
     if not result.succeeded:
         return AvailabilityOutcome(
             should_record=False, changed=False, previous=previous, current=result.availability

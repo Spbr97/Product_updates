@@ -47,6 +47,13 @@ class FetchContext:
     delivery_pincode: str | None = None
 
 
+#: ``raw_metadata`` key marking a result that does not merely fail to read an availability
+#: but positively disproves the one already on record -- so the engine may retract it.
+#: Lives here because it is a contract between an adapter and the tracking engine, and
+#: this is the layer both of them already depend on.
+RETRACTS_AVAILABILITY = "availability_retracted"
+
+
 @dataclass(frozen=True, slots=True)
 class FetchResult:
     """What an adapter learned about a product in one fetch.

@@ -97,7 +97,7 @@ Where each shop stands, verified 2026-09-02:
 | Vijay Sales | ✅ catalogue, prices filled in | ✅ |
 | Samsung | ✅ catalogue, prices filled in — current models only | ✅ |
 | BigBasket | ❌ search disallowed, publishes no catalogue | ✅ |
-| Blinkit | ❌ quick-commerce app, no readable web surface | ❌ |
+| Blinkit | ❌ no crawlable catalogue | ⚠️ tracks, but reports `needs a delivery area` |
 | Croma | ❌ blocks us (HTTP 403) | ❌ |
 | Sangeetha | ❌ stopped answering | ⚠️ intermittent |
 

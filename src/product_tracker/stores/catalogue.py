@@ -48,9 +48,13 @@ KNOWN_STORES: tuple[StoreInfo, ...] = (
         adapter_key="generic",
     ),
     # Named in the original brief, listed so its checks are attributed to Blinkit rather
-    # than lost in "generic". Blinkit is a ~10-minute quick-commerce app: no crawlable web
-    # catalogue, and every price is gated behind a delivery pincode set in an app session.
-    # Checks are expected to fail; the circuit breaker backs it off, like Croma.
+    # than lost in "generic". Blinkit is a ~10-minute quick-commerce app with no crawlable
+    # catalogue, and both price and stock are gated behind a delivery area set in an app
+    # session. Measured 2026-09-03: it *does* serve a readable product page, and that page
+    # publishes valid JSON-LD claiming OutOfStock for everything until an address exists.
+    # So a check reads it fine and records `needs_location` (partial) -- see
+    # stores/pincode.py, which is what stops that false claim being recorded as stock.
+    # It still never yields a price, so the circuit breaker backs it off, like Croma.
     StoreInfo(
         slug="blinkit",
         display_name="Blinkit",

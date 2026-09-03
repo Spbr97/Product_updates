@@ -264,6 +264,51 @@ class TestCheckProduct:
 
         assert execution.error_type == "price_not_found"
 
+    def test_a_stock_gated_shop_retracts_a_false_out_of_stock(
+        self, service: ProductService, engine: TrackingEngine, db_session: Session
+    ) -> None:
+        """The correction has to reach rows already written, or it is only half a fix.
+
+        Found in the live database: product 21 kept reading "out of stock" from checks run
+        before the Blinkit fix. A non-success leaves known fields alone -- deliberately, so
+        one bad night cannot erase months of readings -- which meant the false value was
+        frozen there permanently, and the very next check proving it wrong changed nothing.
+        """
+        url = "https://blinkit.com/prn/amul-taaza-toned-milk/prid/14639"
+        respx.get(url).mock(
+            return_value=httpx.Response(200, html=load("jsonld_out_of_stock.html"))
+        )
+        product = service.add(url)
+        # Stand in for the pre-fix state: a false reading already on the row.
+        product.availability = Availability.OUT_OF_STOCK
+        db_session.flush()
+
+        execution = engine.check_product(db_session, product.id)
+
+        assert execution.error_type == "needs_location"
+        assert execution.availability_result is Availability.UNKNOWN
+        # The point of the test: the stale value is gone, not merely un-updated.
+        assert product.availability is Availability.UNKNOWN
+        assert product.availability is not Availability.OUT_OF_STOCK
+
+    def test_an_ordinary_failure_still_keeps_what_we_knew(
+        self, service: ProductService, engine: TrackingEngine, db_session: Session
+    ) -> None:
+        """Retraction must not become a general licence to erase on failure.
+
+        A timeout learns nothing, so a known availability has to survive it -- otherwise
+        every network hiccup wipes real readings.
+        """
+        url = "https://shop.example.com/p/keeps-what-we-knew"
+        respx.get(url).mock(side_effect=httpx.ConnectTimeout("nope"))
+        product = service.add(url)
+        product.availability = Availability.IN_STOCK
+        db_session.flush()
+
+        engine.check_product(db_session, product.id)
+
+        assert product.availability is Availability.IN_STOCK
+
     def test_out_of_stock_is_a_successful_check(
         self, service: ProductService, engine: TrackingEngine, db_session: Session
     ) -> None:

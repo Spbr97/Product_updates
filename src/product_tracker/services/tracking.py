@@ -45,6 +45,7 @@ from ..db.models import CheckExecution, Product
 from ..domain.enums import Availability, CheckStatus, FetchMethod, FetchOutcome
 from ..domain.errors import NotFoundError
 from ..domain.models import (
+    RETRACTS_AVAILABILITY,
     CheckGuard,
     FetchContext,
     FetchResult,
@@ -321,6 +322,13 @@ class TrackingEngine:
             self._apply(product, result)
         else:
             product.consecutive_failures += 1
+            # A non-success normally leaves the known fields alone, so that one bad night
+            # does not erase months of readings. A retraction is the exception: the check
+            # established that the stored availability was never about this product, and
+            # leaving it would keep showing a shop's mistake as a fact for ever. Only the
+            # disproved field is cleared -- the price and name stand.
+            if result.raw_metadata.get(RETRACTS_AVAILABILITY):
+                product.availability = Availability.UNKNOWN
 
         self._evaluate_rules(
             session=session,
