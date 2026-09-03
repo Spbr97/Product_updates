@@ -651,17 +651,18 @@ suite never depends on Amazon or Flipkart being online.
 `.github/workflows/ci.yml` runs on every push and pull request, in four jobs:
 
 - **lint and types** — `ruff` and `mypy`.
-- **tests** — the full suite against a real PostgreSQL, on Python 3.12 and 3.13. It also
-  asserts that the database-backed tests were actually *collected*: a broken
-  `TEST_DATABASE_URL` would otherwise skip ~350 tests and still report green, which is
-  worse than a red build.
+- **tests** — the full suite against a real PostgreSQL, on Python 3.12, 3.13 and 3.14 —
+  every version `requires-python = ">=3.12"` promises, so the promise is tested rather
+  than asserted. It also asserts that the database-backed tests were actually
+  *collected*: a broken `TEST_DATABASE_URL` would otherwise skip ~350 tests and still
+  report green, which is worse than a red build.
 
-  **A green run locally does not mean a green run here.** The matrix exists because the
-  standard library changes behaviour between versions in ways that change what this
-  program fetches: `urllib.robotparser` on 3.12 honours the *first* matching rule while
-  3.13+ honour the *longest*, so the same robots.txt permitted a path on one and
-  forbade it on the other. That shipped, and was only caught by reading CI. If your
-  virtualenv is not 3.12, run the oldest supported version before trusting a local pass:
+  **The matrix earns its cost.** The standard library changes behaviour between versions
+  in ways that change what this program fetches: `urllib.robotparser` on 3.12 honours the
+  *first* matching rule while 3.13+ honour the *longest*, so the same robots.txt permitted
+  a path on one and forbade it on the other. That shipped. It was invisible to a developer
+  working on 3.14 — which is why 3.14 is now tested too, rather than left as the
+  supported-but-unverified top of the range. To reproduce a specific version locally:
 
   ```bash
   docker run --rm --network product-tracker_default -v "$PWD:/src:ro" -w /work \

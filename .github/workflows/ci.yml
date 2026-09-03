@@ -80,9 +80,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.12 is the declared minimum and the version the Docker image uses; 3.13 catches
-        # deprecations before they become failures.
-        python-version: ["3.12", "3.13"]
+        # Every version pyproject's `requires-python = ">=3.12"` promises to support, so
+        # that the promise is tested rather than asserted. 3.12 is the floor and what the
+        # Docker image runs; 3.13 catches deprecations early; 3.14 is what a contributor
+        # installing "latest" actually gets.
+        #
+        # The top of the range is not a formality. `urllib.robotparser` honours the first
+        # matching rule on 3.12 and the longest match on 3.13+, so one robots.txt gave two
+        # different answers about what we were allowed to fetch. A developer on 3.14 saw
+        # green while CI's 3.12 was red for five commits. Whichever end of the range is
+        # left untested is the end the next divergence hides in.
+        python-version: ["3.12", "3.13", "3.14"]
 
     services:
       postgres:
