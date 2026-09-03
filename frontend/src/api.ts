@@ -199,9 +199,10 @@ export class ApiError extends Error {
 const BASE = "/api/v1";
 
 /**
- * The key, if a person pasted one on the login screen. A browser form cannot send a
- * header, so the API also accepts it as a `pt_key` cookie -- but keeping it here lets the
- * SPA send the header directly, which is the documented path.
+ * The key, if a person has signed in. Held in localStorage rather than a cookie: the API
+ * authenticates on the `X-API-Key` header only, and a header cannot be forged onto a
+ * request by another origin the way a cookie is sent automatically. That is why there is
+ * no cookie path -- it would be a CSRF surface bought for nothing.
  */
 function apiKey(): string | null {
   try {
@@ -209,6 +210,23 @@ function apiKey(): string | null {
   } catch {
     return null;
   }
+}
+
+export function hasApiKey(): boolean {
+  return apiKey() !== null;
+}
+
+/**
+ * Called when the API rejects our credentials, so the shell can ask for a key instead of
+ * leaving each page to render "missing or invalid X-API-Key" at a dead end.
+ *
+ * A single hook rather than per-page handling: any page can be the first one loaded, and
+ * four copies of this would drift.
+ */
+let onUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
 }
 
 export function setApiKey(key: string | null): void {
@@ -242,6 +260,7 @@ async function request<T>(
   const parsed = text ? JSON.parse(text) : null;
 
   if (!res.ok) {
+    if (res.status === 401) onUnauthorized?.();
     const err = parsed?.error ?? {};
     throw new ApiError(
       res.status,

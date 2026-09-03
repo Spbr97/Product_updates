@@ -185,3 +185,12 @@ code { background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
 .notice.warn { background: var(--caution-bg); border-color: var(--caution); color: var(--caution); }
 .inline-form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin: 0 0 16px; }
 .inline-form .field { flex: 1 1 180px; }
+
+/* --- sign in ---------------------------------------------------------------------- */
+.signin { max-width: 460px; margin: 40px auto; }
+.signin h1 { margin-bottom: 8px; }
+.snippet {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; overflow-x: auto; font-size: 0.86rem; margin: 4px 0 12px;
+}
+.snippet code { background: none; border: none; padding: 0; }

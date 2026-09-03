@@ -552,8 +552,16 @@ exactly wrong for a shop that refused us. So a cell reads `Refused`, `No price`,
 "Out of stock" unless the shop said so. Mixed currencies suppress the cheapest badge and
 say why rather than inventing an exchange rate.
 
-Auth follows the API. With no `API_KEY` (the localhost default) it just works; where keys
-are in use the app sends `X-API-Key` from a value in `localStorage` under `pt_key`.
+Auth follows the API. With no accounts configured it just works. Where keys are in use,
+the first 401 replaces the page with a **sign-in screen**: paste a key and it is kept in
+`localStorage` under `pt_key` and sent as `X-API-Key` from then on. The screen names the
+CLI command that issues one, because accounts are provisioned from the CLI and nothing in
+the browser can create them. A "Sign out" control appears in the header whenever a key is
+held, and clears it.
+
+The key is deliberately not a cookie. The API authenticates on the header only, and a
+header cannot be attached to a cross-origin request the way a cookie is sent
+automatically — so there is no CSRF surface to defend.
 
 Tests: `cd frontend && npm test` (Vitest + Testing Library, the API mocked with MSW) —
 covers the SDD §58 list. The Python side (`tests/ui/`) checks only that the bundle is
@@ -753,7 +761,7 @@ docker build -f docker/Dockerfile `
 Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
 
 - **Test coverage** — 1,423 Python tests (unit, integration against a real PostgreSQL, and
-  the API surface) plus 49 Vitest tests for the UI. CI fails the build if the
+  the API surface) plus 56 Vitest tests for the UI. CI fails the build if the
   database-backed tests are silently skipped.
 - **Docker** — multi-stage build (Node builds the SPA, and never enters the runtime
   image), non-root user, healthchecks, `migrate` as a separate one-shot service.
