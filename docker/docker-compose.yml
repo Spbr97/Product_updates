@@ -38,7 +38,13 @@ services:
       POSTGRES_PASSWORD: tracker
       POSTGRES_DB: tracker
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Bound to the loopback, not 0.0.0.0. Published to every interface, this port
+      # hands out the whole database to anyone who can route to the host -- the
+      # credentials above are development defaults, and `users` carries api_key_hash
+      # with INSERT allowed, so reaching Postgres is a way around the API's auth
+      # rather than merely a way past it. Set POSTGRES_PORT to change the host port;
+      # to expose it deliberately, write the interface you mean.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
@@ -66,7 +72,11 @@ services:
       - --port
       - "8000"
     ports:
-      - "${API_PORT:-8000}:8000"
+      # Loopback for the same reason. The API answers 401 without a key, so this is
+      # defence in depth rather than the fix for a hole -- but /ui and /health are
+      # unauthenticated by design, and a dev stack has no business advertising them
+      # to the network. Put a reverse proxy in front of it for a real deployment.
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     restart: unless-stopped
     depends_on:
       db:
