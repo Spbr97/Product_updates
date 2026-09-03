@@ -103,6 +103,33 @@ class TestMaskDsnPassword:
         assert mask_dsn_password(given) == expected
 
 
+class TestDeliveryPincode:
+    def test_unset_by_default(self) -> None:
+        """Nobody gets a delivery area they did not ask for."""
+        assert _settings().delivery_pincode is None
+
+    @pytest.mark.parametrize("given", ["", "   "])
+    def test_blank_is_unset(self, given: str) -> None:
+        """``DELIVERY_PINCODE=`` in a .env file arrives as an empty string."""
+        assert _settings(delivery_pincode=given).delivery_pincode is None
+
+    def test_a_valid_pincode_is_kept(self) -> None:
+        assert _settings(delivery_pincode=" 560037 ").delivery_pincode == "560037"
+
+    @pytest.mark.parametrize("given", ["56003", "5600377", "56003a", "560 037", "abcdef"])
+    def test_a_malformed_pincode_is_refused(self, given: str) -> None:
+        """Loudly, at startup. Sent silently to every retailer and quietly ignored, a
+        typo'd pincode leaves prices from the shop's default area while the operator
+        believes they are local."""
+        with pytest.raises(ValueError):
+            _settings(delivery_pincode=given)
+
+    def test_it_is_not_a_secret(self) -> None:
+        """A PIN code is not a credential, so ``product-tracker config`` shows it --
+        which is the point: an operator must be able to see what they configured."""
+        assert _settings(delivery_pincode="560037").redacted()["delivery_pincode"] == "560037"
+
+
 class TestBounds:
     def test_check_interval_has_a_floor(self) -> None:
         """Below 60s we would hammer stores; the schema refuses it."""

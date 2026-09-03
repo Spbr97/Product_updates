@@ -192,7 +192,8 @@ src/product_tracker/
   domain/        Enums, frozen value objects, exception hierarchy. Imports nothing.
   db/            Declarative base, ORM models, engine/session management
   repositories/  Data access, one class per aggregate. Never commits.
-  stores/        StoreAdapter interface, registry, per-store adapters, selector configs
+  stores/        StoreAdapter interface, registry, per-store adapters, selector configs,
+                 store catalogue, robots.txt rules, delivery-area classification
   notifications/ NotificationProvider interface, registry, per-channel providers
   services/      Tracking + rule engines, statistics, change detection, comparison,
                  discovery/search, spec reading, variants, query policy, Product Entries
@@ -248,6 +249,7 @@ most:
 | `CHECK_INTERVAL_SECONDS` | `3600` | Default per-product interval. Floor of 60s. |
 | `HTTP_TIMEOUT_SECONDS` / `HTTP_MAX_RETRIES` | `25` / `3` | Outbound request bounds. |
 | `STORE_MIN_INTERVAL_SECONDS` / `FETCH_JITTER_SECONDS` | `5` / `3` | Politeness: minimum gap between requests to one store, plus random jitter. |
+| `DELIVERY_PINCODE` | *(unset)* | Six-digit PIN code to price against. Unset means every check silently takes the shop's default area. See [Delivery location](#delivery-location) below. |
 | `PLAYWRIGHT_ENABLED` | `true` | Set `false` to run without a browser. |
 | `SEARCH_PRICE_LOOKUPS` | `5` | Search hits from a catalogue carry no price; this many get their product page fetched so the result is comparable. `0` switches it off. |
 | `SHARED_PACING` / `STORE_MAX_WAIT_SECONDS` | `true` / `20` | Pace requests across processes, so two people searching at once are not two independent rate limiters. |
@@ -262,6 +264,33 @@ most:
 
 Secrets (`SMTP_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `API_KEY`) are held as `SecretStr`, masked
 by `product-tracker config`, and stripped from logs by a redaction processor.
+
+### Delivery location
+
+Indian retailers price and stock per delivery area, so "what does this cost?" is a
+question with a location in it. `DELIVERY_PINCODE` is where you answer it:
+
+```bash
+DELIVERY_PINCODE=560037
+```
+
+**What it does today, stated plainly.** No catalogued shop can be given a delivery area
+from outside a browser session — Amazon sets it with an address-change POST carrying a
+CSRF token, Flipkart through a session-bound location API, BigBasket with an
+address cookie the site issues. Reproducing any of those means holding a session, which
+is the anti-bot line this project does not cross.
+
+So setting a PIN code does not localise prices. What it does is stop the tracker
+*pretending*: a shop classified as pricing-per-area that returns a page with no price
+records the outcome `needs_location` and the check status `partial`, instead of leaving
+"no price found" to be read as a broken selector — or, far worse, as stock information.
+Availability stays `unknown`, never `out_of_stock`, and the comparison grid renders such
+a cell as "no price". Leave `DELIVERY_PINCODE` unset and nothing anywhere changes.
+
+The per-shop classifications, and the reasoning for each, are in
+[`src/product_tracker/stores/pincode.py`](src/product_tracker/stores/pincode.py). A shop
+that ever turns out to take a PIN code in a plain cookie or query parameter becomes one
+line there, with no change to the fetch path or any adapter.
 
 ## 7. Database setup
 

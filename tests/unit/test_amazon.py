@@ -13,15 +13,25 @@ import pytest
 from tests.unit.test_adapters import load
 
 from product_tracker.domain.enums import Availability, FetchMethod, FetchOutcome
+from product_tracker.domain.models import FetchContext
 from product_tracker.stores.amazon import AmazonAdapter, read_availability
 from product_tracker.stores.http import FetchSuccess
 
 URL = "https://www.amazon.in/Samsung-Snapdragon/dp/B0H3FN92VB?th=1"
 
+#: No delivery area configured, which is the default and what every case below
+#: assumes unless it says otherwise.
+CTX = FetchContext()
 
-def interpret(fixture: str, url: str = URL):  # type: ignore[no-untyped-def]
+
+def interpret(  # type: ignore[no-untyped-def]
+    fixture: str, url: str = URL, ctx: FetchContext = CTX
+):
     return AmazonAdapter()._interpret(
-        FetchSuccess(html=load(fixture), url=url, http_status=200), url, FetchMethod.HTTP
+        FetchSuccess(html=load(fixture), url=url, http_status=200),
+        url,
+        FetchMethod.HTTP,
+        ctx,
     )
 
 
@@ -138,11 +148,36 @@ class TestMissingData:
         assert result.availability is Availability.UNKNOWN
         assert result.name is not None
 
+    def test_a_configured_pincode_names_the_reason(self) -> None:
+        """Amazon prices per delivery area and cannot be localised without a session.
+
+        With a PIN code configured, "no price in the buy box" becomes the more specific
+        "no price *for this area*" -- which is what stops an operator concluding the
+        selectors are broken and going looking for a bug that is not there.
+        """
+        result = interpret("amazon_no_price.html", ctx=FetchContext(delivery_pincode="560037"))
+
+        assert result.outcome is FetchOutcome.NEEDS_LOCATION
+        assert result.price is None
+        # The invariant, restated where it matters most: still not out of stock.
+        assert result.availability is Availability.UNKNOWN
+        assert "560037" in (result.message or "")
+
+    def test_a_price_is_still_a_price_with_a_pincode_set(self) -> None:
+        """Configuring a delivery area must not turn working checks into failures."""
+        result = interpret(
+            "amazon_product.html", ctx=FetchContext(delivery_pincode="560037")
+        )
+
+        assert result.outcome is FetchOutcome.OK
+        assert result.price == Decimal("61480.00")
+
     def test_an_unrecognisable_page_reports_page_structure(self) -> None:
         result = AmazonAdapter()._interpret(
             FetchSuccess(html="<html><body>nothing</body></html>", url=URL, http_status=200),
             URL,
             FetchMethod.HTTP,
+            CTX,
         )
         assert result.outcome is FetchOutcome.PAGE_STRUCTURE
 

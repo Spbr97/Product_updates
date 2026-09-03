@@ -19,7 +19,7 @@ from functools import partial
 
 from ..core.config import Settings
 from ..core.logging import get_logger
-from ..domain.enums import SearchOutcome
+from ..domain.enums import FetchOutcome, SearchOutcome
 from ..domain.models import CheckGuard, FetchContext, SearchHit, SearchResult
 from ..scheduler.throttle import build_guard
 from ..stores import browser, robots
@@ -144,6 +144,10 @@ def discover(
         # Each pass decides for itself; the adapters never escalate on their own here.
         allow_browser=False,
         user_agent=settings.http_user_agent,
+        # Search's price lookups fetch real product pages, so they must ask the same
+        # location-shaped question a scheduled check does. A comparison built from one
+        # area's prices and another's is not a comparison.
+        delivery_pincode=settings.delivery_pincode,
     )
 
     results = {
@@ -302,9 +306,15 @@ def _price_one(registry: StoreRegistry, hit: SearchHit, ctx: FetchContext) -> Se
     fetched = registry.resolve(hit.url).fetch_product(hit.url, ctx)
     price = getattr(fetched, "price", None)
     if price is None:
-        return SearchResult.failure(
-            hit.store_slug, SearchOutcome.PAGE_STRUCTURE, "no price on the product page"
+        # Say *why* there is no price when the adapter knew. "No price on the page" and
+        # "this shop will not quote one without a delivery area" are different findings,
+        # and only the second tells the reader that setting DELIVERY_PINCODE is futile.
+        reason = (
+            "shop prices per delivery area and would not quote one"
+            if getattr(fetched, "outcome", None) is FetchOutcome.NEEDS_LOCATION
+            else "no price on the product page"
         )
+        return SearchResult.failure(hit.store_slug, SearchOutcome.PAGE_STRUCTURE, reason)
 
     published = (getattr(fetched, "name", None) or "").strip()
     return SearchResult(

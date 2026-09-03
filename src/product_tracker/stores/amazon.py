@@ -32,7 +32,7 @@ from ..domain.models import FetchContext, FetchResult
 from ..utils.money import parse_price
 from ..utils.urls import host_of
 from . import browser as browser_module
-from . import selector_config
+from . import pincode, selector_config
 from .base import DomainMatchAdapter
 from .http import FetchSuccess, failure_to_result
 from .http import fetch as http_fetch
@@ -139,7 +139,7 @@ class AmazonAdapter(DomainMatchAdapter):
         response = http_fetch(url, ctx)
 
         if isinstance(response, FetchSuccess):
-            result = self._interpret(response, url, FetchMethod.HTTP)
+            result = self._interpret(response, url, FetchMethod.HTTP, ctx)
             if result.succeeded or not ctx.allow_browser:
                 self._log(url, result)
                 return result
@@ -156,7 +156,7 @@ class AmazonAdapter(DomainMatchAdapter):
 
         rendered = browser_module.render(url, ctx)
         if isinstance(rendered, FetchSuccess):
-            result = self._interpret(rendered, url, FetchMethod.BROWSER)
+            result = self._interpret(rendered, url, FetchMethod.BROWSER, ctx)
             self._log(url, result)
             return result
 
@@ -169,7 +169,9 @@ class AmazonAdapter(DomainMatchAdapter):
         self._log(url, combined)
         return combined
 
-    def _interpret(self, response: FetchSuccess, url: str, method: FetchMethod) -> FetchResult:
+    def _interpret(
+        self, response: FetchSuccess, url: str, method: FetchMethod, ctx: FetchContext
+    ) -> FetchResult:
         selectors = self.selectors
         soup = BeautifulSoup(response.html, "html.parser")
 
@@ -209,20 +211,24 @@ class AmazonAdapter(DomainMatchAdapter):
                     fetch_method=method,
                     http_status=response.http_status,
                 )
-            return FetchResult(
-                outcome=FetchOutcome.PRICE_NOT_FOUND,
-                # Identified the product, could not read a price. That says nothing about
-                # stock, so whatever the availability block said stands on its own.
-                availability=availability,
-                name=name,
-                product_identifier=identifier,
-                image_url=image,
-                raw_metadata={"source": "selectors"},
-                fetch_method=method,
-                http_status=response.http_status,
-                message=(
-                    "found the product but no price in the buy box; the listing may have "
-                    "no direct offer, or the price selectors may need updating"
+            return pincode.escalate(
+                url,
+                ctx,
+                FetchResult(
+                    outcome=FetchOutcome.PRICE_NOT_FOUND,
+                    # Identified the product, could not read a price. That says nothing
+                    # about stock, so whatever the availability block said stands alone.
+                    availability=availability,
+                    name=name,
+                    product_identifier=identifier,
+                    image_url=image,
+                    raw_metadata={"source": "selectors"},
+                    fetch_method=method,
+                    http_status=response.http_status,
+                    message=(
+                        "found the product but no price in the buy box; the listing may have "
+                        "no direct offer, or the price selectors may need updating"
+                    ),
                 ),
             )
 

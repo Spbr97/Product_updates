@@ -7,6 +7,7 @@ on Flipkart or anyone else being reachable.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -310,6 +311,9 @@ class TestStatusMapping:
             (FetchOutcome.OUT_OF_STOCK, CheckStatus.SUCCESS),
             (FetchOutcome.UNAVAILABLE, CheckStatus.SUCCESS),
             (FetchOutcome.PRICE_NOT_FOUND, CheckStatus.PARTIAL),
+            # Partial, not failed: nothing went wrong with the request. The shop simply
+            # will not quote a price without a delivery area we cannot give it.
+            (FetchOutcome.NEEDS_LOCATION, CheckStatus.PARTIAL),
             (FetchOutcome.BLOCKED, CheckStatus.FAILED),
             (FetchOutcome.TIMEOUT, CheckStatus.FAILED),
             (FetchOutcome.PAGE_STRUCTURE, CheckStatus.FAILED),
@@ -477,6 +481,84 @@ class TestBrowserFallback:
 
         assert calls == []
         assert result.outcome is FetchOutcome.PAGE_STRUCTURE
+
+
+class TestDeliveryPincodeOnTheWire:
+    """What actually leaves the machine when a delivery area is configured.
+
+    ``apply`` returning the right dictionary is one thing; ``httpx`` sending it is
+    another, and it is the wire that matters. These go through the real fetch path with
+    respx intercepting, so the assertion is about the request that was made.
+    """
+
+    def test_nothing_extra_is_sent_when_no_pincode_is_configured(
+        self, generic: GenericStoreAdapter
+    ) -> None:
+        url = "https://shop.example.com/p/plain"
+        route = respx.get(url).mock(
+            return_value=httpx.Response(200, html=load("jsonld_in_stock.html"))
+        )
+
+        generic.fetch_product(url, CTX)
+
+        assert "cookie" not in route.calls[0].request.headers
+
+    def test_a_cookie_rule_reaches_the_request(
+        self, generic: GenericStoreAdapter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No catalogued shop has such a rule today, so this installs one.
+
+        It is the mechanism that is being tested: when a host is ever found that takes a
+        bare PIN code in a cookie, one line in ``pincode.RULES`` must be enough.
+        """
+        from product_tracker.stores import pincode
+
+        monkeypatch.setitem(
+            pincode.RULES, "shop.example.com", pincode.PincodeRule(cookies=("pin",), note="x")
+        )
+        url = "https://shop.example.com/p/cookie"
+        route = respx.get(url).mock(
+            return_value=httpx.Response(200, html=load("jsonld_in_stock.html"))
+        )
+
+        generic.fetch_product(
+            url, replace(CTX, delivery_pincode="560037")
+        )
+
+        assert "pin=560037" in route.calls[0].request.headers["cookie"]
+
+    def test_a_query_rule_changes_the_url_fetched(
+        self, generic: GenericStoreAdapter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from product_tracker.stores import pincode
+
+        monkeypatch.setitem(
+            pincode.RULES, "shop.example.com", pincode.PincodeRule(query_param="pin", note="x")
+        )
+        route = respx.get("https://shop.example.com/p/query", params={"pin": "560037"}).mock(
+            return_value=httpx.Response(200, html=load("jsonld_in_stock.html"))
+        )
+
+        result = generic.fetch_product(
+            "https://shop.example.com/p/query", replace(CTX, delivery_pincode="560037")
+        )
+
+        assert route.called
+        assert result.outcome is FetchOutcome.OK
+
+    def test_an_unclassified_host_is_fetched_exactly_as_given(
+        self, generic: GenericStoreAdapter
+    ) -> None:
+        """The whole feature must stay invisible for a host we know nothing about."""
+        url = "https://shop.example.com/p/untouched?a=1"
+        route = respx.get(url).mock(
+            return_value=httpx.Response(200, html=load("jsonld_in_stock.html"))
+        )
+
+        generic.fetch_product(url, replace(CTX, delivery_pincode="560037"))
+
+        assert str(route.calls[0].request.url) == url
+        assert "cookie" not in route.calls[0].request.headers
 
 
 class TestRegistryLookup:

@@ -25,6 +25,7 @@ from ..domain.enums import Availability, FetchMethod, FetchOutcome
 from ..domain.errors import InvalidURLError, UnsafeURLError
 from ..domain.models import FetchContext, FetchResult
 from ..utils.urls import assert_public_host, host_of, redact_urls
+from . import pincode
 
 log = get_logger(__name__)
 
@@ -125,6 +126,11 @@ def _fetch_raw(url: str, ctx: FetchContext) -> _Raw | FetchFailure:
     ``ctx.verify_public_host`` re-runs the SSRF check immediately before connecting.
     Validation at ``add`` time can be defeated by DNS rebinding, so the guard runs again
     here, on the host we are about to contact -- including after redirects.
+
+    Delivery-area localisation is applied here rather than in each adapter so that
+    :func:`fetch` and :func:`fetch_bytes` share it. ``pincode.apply`` is a no-op unless a
+    PIN code is configured *and* the host has a static way to accept one, so the SSRF
+    check below still runs against the URL actually fetched.
     """
     verify_host = ctx.verify_public_host
     headers = {
@@ -132,6 +138,7 @@ def _fetch_raw(url: str, ctx: FetchContext) -> _Raw | FetchFailure:
         "Accept-Language": ctx.accept_language,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
+    url, cookies = pincode.apply(url, ctx)
 
     try:
         if verify_host:
@@ -139,6 +146,7 @@ def _fetch_raw(url: str, ctx: FetchContext) -> _Raw | FetchFailure:
 
         with httpx.Client(
             headers=headers,
+            cookies=cookies,
             timeout=ctx.timeout_seconds,
             follow_redirects=True,
             max_redirects=5,

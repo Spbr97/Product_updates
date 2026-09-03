@@ -41,6 +41,10 @@ class FetchContext:
     #: explicit at the call site -- and so disabling it (to track an internal host on
     #: purpose) actually disables it at fetch time, not only at validation time.
     verify_public_host: bool = True
+    #: The delivery area to price against, when one is configured. Adapters do not read
+    #: it directly: :mod:`product_tracker.stores.pincode` decides what a given host can
+    #: do with it, which is nothing at all for most of them.
+    delivery_pincode: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -22,7 +22,7 @@ from ..domain.enums import Availability, FetchMethod, FetchOutcome
 from ..domain.models import FetchContext, FetchResult
 from ..utils.urls import host_of
 from . import browser as browser_module
-from . import extraction, selector_config
+from . import extraction, pincode, selector_config
 from .base import DomainMatchAdapter
 from .http import FetchSuccess, failure_to_result
 from .http import fetch as http_fetch
@@ -45,7 +45,7 @@ class FlipkartAdapter(DomainMatchAdapter):
         response = http_fetch(url, ctx)
 
         if isinstance(response, FetchSuccess):
-            result = self._interpret(response, url, FetchMethod.HTTP)
+            result = self._interpret(response, url, FetchMethod.HTTP, ctx)
             if result.succeeded or not ctx.allow_browser:
                 self._log(url, result)
                 return result
@@ -61,7 +61,7 @@ class FlipkartAdapter(DomainMatchAdapter):
 
         rendered = browser_module.render(url, ctx)
         if isinstance(rendered, FetchSuccess):
-            result = self._interpret(rendered, url, FetchMethod.BROWSER)
+            result = self._interpret(rendered, url, FetchMethod.BROWSER, ctx)
             self._log(url, result)
             return result
 
@@ -74,7 +74,9 @@ class FlipkartAdapter(DomainMatchAdapter):
         self._log(url, combined)
         return combined
 
-    def _interpret(self, response: FetchSuccess, url: str, method: FetchMethod) -> FetchResult:
+    def _interpret(
+        self, response: FetchSuccess, url: str, method: FetchMethod, ctx: FetchContext
+    ) -> FetchResult:
         selectors = self.selectors
         identifier = selector_config.identifier_from_url(url, selectors.identifier_param)
 
@@ -124,19 +126,23 @@ class FlipkartAdapter(DomainMatchAdapter):
                 )
             # Product identified, price not. Availability is unknown -- Flipkart shows no
             # sold-out marker either, and absence of a price is not absence of stock.
-            return FetchResult(
-                outcome=FetchOutcome.PRICE_NOT_FOUND,
-                availability=Availability.UNKNOWN,
-                name=name,
-                product_identifier=identifier,
-                image_url=image,
-                raw_metadata={"source": "selectors"},
-                fetch_method=method,
-                http_status=response.http_status,
-                message=(
-                    "found the product but no price; Flipkart renders prices with "
-                    "JavaScript, so enable PLAYWRIGHT_ENABLED, or the price selectors "
-                    "may need updating"
+            return pincode.escalate(
+                url,
+                ctx,
+                FetchResult(
+                    outcome=FetchOutcome.PRICE_NOT_FOUND,
+                    availability=Availability.UNKNOWN,
+                    name=name,
+                    product_identifier=identifier,
+                    image_url=image,
+                    raw_metadata={"source": "selectors"},
+                    fetch_method=method,
+                    http_status=response.http_status,
+                    message=(
+                        "found the product but no price; Flipkart renders prices with "
+                        "JavaScript, so enable PLAYWRIGHT_ENABLED, or the price selectors "
+                        "may need updating"
+                    ),
                 ),
             )
 

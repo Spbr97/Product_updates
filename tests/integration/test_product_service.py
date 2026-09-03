@@ -219,6 +219,51 @@ class TestCheckProduct:
         assert execution.status is CheckStatus.PARTIAL
         assert execution.availability_result is Availability.UNKNOWN
 
+    def test_a_configured_pincode_records_needs_location(
+        self, service: ProductService, db_session: Session
+    ) -> None:
+        """End to end: the setting reaches the adapter and the reason reaches the row.
+
+        Flipkart prices per delivery area and cannot be localised without a browser
+        session, so with a PIN code configured the recorded reason says so instead of
+        leaving "no price" to be read as a broken selector -- or, far worse, as stock
+        information. The check is ``partial``: the request was fine, the answer was not
+        available at this location.
+        """
+        settings = get_settings().model_copy(update={"delivery_pincode": "560037"})
+        engine = TrackingEngine(StoreRegistry(), settings)
+        url = "https://www.flipkart.com/p/itmpincode"
+        route = respx.get(url).mock(
+            return_value=httpx.Response(200, html=load("flipkart_no_price.html"))
+        )
+        product = service.add(url)
+
+        execution = engine.check_product(db_session, product.id)
+
+        assert execution.status is CheckStatus.PARTIAL
+        assert execution.error_type == "needs_location"
+        assert execution.extracted_price is None
+        # The invariant. A location we could not set says nothing about stock.
+        assert execution.availability_result is Availability.UNKNOWN
+        assert product.availability is not Availability.OUT_OF_STOCK
+        # Not transient: asking the same shop again immediately changes nothing, and
+        # re-asking is what shops object to.
+        assert route.call_count == 1
+
+    def test_without_a_pincode_nothing_changes(
+        self, service: ProductService, engine: TrackingEngine, db_session: Session
+    ) -> None:
+        """The feature stays invisible until somebody configures it."""
+        url = "https://www.flipkart.com/p/itmnopin"
+        respx.get(url).mock(
+            return_value=httpx.Response(200, html=load("flipkart_no_price.html"))
+        )
+        product = service.add(url)
+
+        execution = engine.check_product(db_session, product.id)
+
+        assert execution.error_type == "price_not_found"
+
     def test_out_of_stock_is_a_successful_check(
         self, service: ProductService, engine: TrackingEngine, db_session: Session
     ) -> None:

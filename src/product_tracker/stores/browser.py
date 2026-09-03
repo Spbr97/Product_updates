@@ -34,6 +34,7 @@ from ..domain.enums import FetchOutcome
 from ..domain.errors import InvalidURLError, UnsafeURLError
 from ..domain.models import FetchContext
 from ..utils.urls import assert_public_host, host_of, redact_urls
+from . import pincode
 from .http import FetchFailure, FetchSuccess
 
 log = get_logger(__name__)
@@ -217,6 +218,10 @@ def _render_with(
     """Load one page in an already-running browser."""
     verify_host = ctx.verify_public_host
     playwright = active.playwright
+    # Same localisation the plain HTTP path applies, so a rendered check and a fetched
+    # one ask the same question. A no-op unless a PIN code is configured and the host
+    # has a static way to take one.
+    url, cookies = pincode.apply(url, ctx)
 
     try:
         page = active.browser.new_page(
@@ -225,6 +230,13 @@ def _render_with(
             extra_http_headers={"Accept-Language": ctx.accept_language},
         )
         try:
+            if cookies:
+                page.context.add_cookies(
+                    [
+                        {"name": name, "value": value, "url": url}
+                        for name, value in cookies.items()
+                    ]
+                )
             response = page.goto(
                 url, wait_until="domcontentloaded", timeout=ctx.timeout_seconds * 1000
             )

@@ -101,6 +101,7 @@ class TrackingEngine:
             accept_language=self.settings.http_accept_language,
             max_bytes=self.settings.http_max_response_bytes,
             verify_public_host=self.settings.block_private_addresses,
+            delivery_pincode=self.settings.delivery_pincode,
         )
 
     def check_product(self, session: Session, product_id: int) -> CheckExecution:
@@ -452,13 +453,15 @@ def _status_for(result: FetchResult) -> CheckStatus:
 
     ``OUT_OF_STOCK`` and ``UNAVAILABLE`` are successes: the check did its job and learned
     the truth. ``PRICE_NOT_FOUND`` is ``partial`` -- the page was readable but did not
-    give us the number we came for.
+    give us the number we came for. ``NEEDS_LOCATION`` is the same shape of answer with a
+    reason attached, so it is ``partial`` too rather than ``failed``: nothing went wrong
+    with the request, the shop simply will not quote a price without a delivery area.
     """
     if result.outcome is FetchOutcome.OK:
         return CheckStatus.SUCCESS
     if result.outcome in (FetchOutcome.OUT_OF_STOCK, FetchOutcome.UNAVAILABLE):
         return CheckStatus.SUCCESS
-    if result.outcome is FetchOutcome.PRICE_NOT_FOUND:
+    if result.outcome in (FetchOutcome.PRICE_NOT_FOUND, FetchOutcome.NEEDS_LOCATION):
         return CheckStatus.PARTIAL
     return CheckStatus.FAILED
 

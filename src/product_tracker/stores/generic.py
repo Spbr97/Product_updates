@@ -19,7 +19,7 @@ from ..domain.models import FetchContext, FetchResult
 from ..utils.money import DEFAULT_CURRENCY
 from ..utils.urls import host_of
 from . import browser as browser_module
-from . import extraction
+from . import extraction, pincode
 from .base import StoreAdapter
 from .http import FetchSuccess, failure_to_result
 from .http import fetch as http_fetch
@@ -47,7 +47,7 @@ class GenericStoreAdapter(StoreAdapter):
         response = http_fetch(url, ctx)
 
         if isinstance(response, FetchSuccess):
-            result = self._interpret(response, FetchMethod.HTTP)
+            result = self._interpret(response, FetchMethod.HTTP, ctx)
             if result.succeeded or not ctx.allow_browser:
                 self._log(url, result)
                 return result
@@ -66,7 +66,7 @@ class GenericStoreAdapter(StoreAdapter):
 
         rendered = browser_module.render(url, ctx)
         if isinstance(rendered, FetchSuccess):
-            result = self._interpret(rendered, FetchMethod.BROWSER)
+            result = self._interpret(rendered, FetchMethod.BROWSER, ctx)
             if result.succeeded:
                 self._log(url, result)
                 return result
@@ -84,7 +84,9 @@ class GenericStoreAdapter(StoreAdapter):
         self._log(url, combined)
         return combined
 
-    def _interpret(self, response: FetchSuccess, method: FetchMethod) -> FetchResult:
+    def _interpret(
+        self, response: FetchSuccess, method: FetchMethod, ctx: FetchContext
+    ) -> FetchResult:
         data = extraction.extract(response.html, response.url)
 
         if data is None:
@@ -118,18 +120,24 @@ class GenericStoreAdapter(StoreAdapter):
                 )
             # Price genuinely missing. Availability stays whatever the page said, which
             # for most such pages is UNKNOWN -- and must not become OUT_OF_STOCK.
-            return FetchResult(
-                outcome=FetchOutcome.PRICE_NOT_FOUND,
-                availability=data.availability,
-                name=data.name,
-                product_identifier=data.identifier,
-                image_url=data.image_url,
-                raw_metadata=data.raw,
-                fetch_method=method,
-                http_status=response.http_status,
-                message=(
-                    "found the product but no price; the page may require a PIN code or "
-                    "render its price with JavaScript"
+            # ``escalate`` narrows the "may require a PIN code" guess to a statement,
+            # but only where the host is known to price per area and one was configured.
+            return pincode.escalate(
+                response.url,
+                ctx,
+                FetchResult(
+                    outcome=FetchOutcome.PRICE_NOT_FOUND,
+                    availability=data.availability,
+                    name=data.name,
+                    product_identifier=data.identifier,
+                    image_url=data.image_url,
+                    raw_metadata=data.raw,
+                    fetch_method=method,
+                    http_status=response.http_status,
+                    message=(
+                        "found the product but no price; the page may require a PIN code or "
+                        "render its price with JavaScript"
+                    ),
                 ),
             )
 

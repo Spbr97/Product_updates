@@ -69,6 +69,28 @@ and destroy the user's trust in every alert after that. So `PRICE_NOT_FOUND` is 
 outcome from `OUT_OF_STOCK`, `check_executions` records which one happened, and history is
 only written for what was actually learned.
 
+### A price has a location, and we say when we could not set it
+
+Indian retailers price and stock per delivery area, so every price this tracker has ever
+recorded came from *some* area — until `DELIVERY_PINCODE` existed, an unstated one.
+
+`stores/pincode.py` is the single place that knows what each host does with a PIN code.
+Adapters never read `ctx.delivery_pincode`: they call `apply` on the way out and
+`escalate` on the way back. Today every classified host is `needs_js` — no shop takes a
+delivery area in a plain cookie or query parameter, and reproducing the session
+handshakes that do work would be anti-bot evasion. So `apply` is a no-op and the value is
+in `escalate`, which turns a `PRICE_NOT_FOUND` on an area-priced shop into
+`NEEDS_LOCATION`.
+
+That is a deliberately narrow claim, and it only ever *narrows*: a successful read is
+untouched, a block stays a block, and availability is carried through unchanged. The
+alternative — recording the default area's price as the answer — is the same class of
+error as calling a failed extraction "out of stock", and it is harder to notice because
+the number looks right.
+
+`NEEDS_LOCATION` maps to `CheckStatus.PARTIAL`, not `FAILED`: the request was fine and
+the page was readable. In the comparison grid it lands as `NO_PRICE`.
+
 ### History records observations; executions record attempts
 
 Two tables, two purposes:

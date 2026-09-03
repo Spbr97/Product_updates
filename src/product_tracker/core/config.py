@@ -10,6 +10,7 @@ never fails on a missing environment.
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Any, Literal
 
@@ -76,6 +77,18 @@ class Settings(BaseSettings):
     )
     http_accept_language: str = "en-IN,en;q=0.9"
     http_max_response_bytes: int = Field(default=5_000_000, ge=10_000)
+
+    # --- Delivery location ------------------------------------------------------
+    #: Indian retailers price and stock per delivery area, so "the price" is a question
+    #: with a location in it. Unset means whatever the shop's default area returns --
+    #: which is what happened before this existed, silently. Set it and a shop that
+    #: cannot be localised without a browser session reports ``needs_location`` instead
+    #: of a price from somewhere else.
+    delivery_pincode: str | None = Field(
+        default=None,
+        description="Six-digit Indian PIN code to price against. Unset uses the shop default.",
+        examples=["560037"],
+    )
 
     # --- Politeness towards stores ----------------------------------------------
     store_min_interval_seconds: float = Field(default=5.0, ge=0.0, le=600.0)
@@ -228,6 +241,24 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("delivery_pincode", mode="before")
+    @classmethod
+    def _valid_pincode(cls, value: object) -> object:
+        """Blank is unset; anything else must be six digits.
+
+        ``DELIVERY_PINCODE=`` in a .env file arrives as an empty string, and a typo'd
+        pincode would otherwise be sent to every retailer as-is and quietly ignored --
+        leaving prices for the shop's default area while the operator believed otherwise.
+        """
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if not re.fullmatch(r"\d{6}", stripped):
+            raise ValueError("DELIVERY_PINCODE must be six digits, e.g. 560037")
+        return stripped
 
     @field_validator("allowed_url_schemes")
     @classmethod

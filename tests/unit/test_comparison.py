@@ -84,6 +84,23 @@ class TestPriceFailureIsNotOutOfStock:
         )
         assert cell.status is CellStatus.NO_PRICE
 
+    def test_needs_location_reports_no_price(self) -> None:
+        """A shop that will not quote a price for our delivery area is a "no price"
+        cell, not a failure and emphatically not a sold-out one. The check succeeded at
+        everything except the one thing we wanted, which is exactly what NO_PRICE means.
+
+        This is a regression guard rather than new behaviour: ``needs_location`` is
+        deliberately absent from ``_FAILURE_OUTCOMES``, and adding it there would turn a
+        readable page into a reported failure.
+        """
+        cell = cell_for_product(
+            make_product(price=None, availability=Availability.UNKNOWN),
+            last_check=(CheckStatus.PARTIAL.value, FetchOutcome.NEEDS_LOCATION.value),
+            now=NOW,
+        )
+        assert cell.status is CellStatus.NO_PRICE
+        assert cell.status is not CellStatus.OUT_OF_STOCK
+
     @pytest.mark.parametrize(
         "outcome",
         [

@@ -85,6 +85,7 @@ class FetchOutcome(StrEnum):
     HTTP_ERROR = "http_error"
     BLOCKED = "blocked"  # Anti-bot response. We record it; we never work around it.
     PAGE_STRUCTURE = "page_structure"  # Page loaded but did not look like we expect.
+    NEEDS_LOCATION = "needs_location"  # Readable, but priced per delivery area we cannot set.
     ERROR = "error"
 
     @property
