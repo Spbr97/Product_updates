@@ -89,6 +89,19 @@ class TestRuleLookup:
         for domain, rule in pincode.RULES.items():
             assert rule.note.strip(), domain
 
+    def test_only_measured_hosts_are_marked_stock_gated(self) -> None:
+        """``stock_gated_by_area`` discards a shop's own stock claims, so it may only be
+        set where that behaviour was actually observed -- not where it seems likely.
+
+        BigBasket is the case in point: quick-commerce-shaped, groceries, area-dependent
+        pricing, and it was marked stock-gated on all of that. A cold fetch then returned
+        a real price and ``unknown`` availability. It does not fake out-of-stock, and
+        discarding its claims would have thrown away real findings.
+        """
+        assert {d for d, r in pincode.RULES.items() if r.stock_gated_by_area} == {
+            "blinkit.com"
+        }
+
 
 class TestApply:
     def test_is_a_no_op_without_a_pincode(self) -> None:

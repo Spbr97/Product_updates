@@ -287,12 +287,17 @@ records the outcome `needs_location` and the check status `partial`, instead of 
 `out_of_stock`, and the comparison grid renders such a cell as "no price". Leave
 `DELIVERY_PINCODE` unset and this half of the behaviour never fires.
 
-**One correction applies whether or not you set a PIN code.** Quick-commerce shops
-(Blinkit, BigBasket) stock *nothing* until a delivery address exists, and their pages say
-`OutOfStock` about every product until one does. A live check on a Blinkit carton of milk
-reported `out_of_stock`; the milk was not out of stock. Such a claim is a statement about
-our missing address, not about the product, so it is recorded as `unknown`. That one is
-not opt-in, because the error happens by default.
+**One correction applies whether or not you set a PIN code.** Blinkit stocks *nothing*
+until a delivery address exists, and its pages say `OutOfStock` about every product until
+one does. A live check on a carton of milk reported `out_of_stock`; the milk was not out
+of stock. Such a claim is a statement about our missing address, not about the product,
+so it is recorded as `unknown`. That one is not opt-in, because the error happens by
+default.
+
+Only Blinkit is classified this way, and only because it was measured. BigBasket looks
+like the same case — groceries, area-dependent pricing — but a cold fetch returns a real
+price and `unknown` availability, so its stock claims are left alone. Discarding a shop's
+findings is itself a way to be wrong.
 
 The per-shop classifications, and the reasoning for each, are in
 [`src/product_tracker/stores/pincode.py`](src/product_tracker/stores/pincode.py). A shop

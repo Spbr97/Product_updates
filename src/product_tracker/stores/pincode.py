@@ -86,10 +86,12 @@ RULES: dict[str, PincodeRule] = {
     ),
     "bigbasket.com": PincodeRule(
         needs_js=True,
-        stock_gated_by_area=True,
-        note="Groceries are the most area-dependent catalogue of all; the address cookie "
-        "is issued by the site against a session, not composed from a PIN code. Nothing "
-        "is deliverable until an area is chosen.",
+        note="Prices vary by serviceable area and the address cookie is issued by the "
+        "site against a session, not composed from a PIN code. Deliberately NOT marked "
+        "stock_gated_by_area: it looks like Blinkit, but measured 2026-09-03 a cold "
+        "fetch returns a real price and availability 'unknown' -- it does not claim "
+        "OutOfStock without an address. Discarding its out-of-stock claims would throw "
+        "away real findings to solve a problem it does not have.",
     ),
     "blinkit.com": PincodeRule(
         needs_js=True,
