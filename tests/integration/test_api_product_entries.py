@@ -479,3 +479,58 @@ class TestTrackingMatrix:
         )
         assert listing["price"] is None
 
+class TestConcurrentAndTransition:
+    """Two of the §56 rows that need committed state between steps: a concurrent-style
+    edit sequence and an availability transition. Each API call is its own transaction,
+    which is exactly how overlapping requests actually reach this service."""
+
+    def test_overlapping_edits_both_land_and_history_survives(
+        self, client: TestClient
+    ) -> None:
+        stub_all()
+        entry = create(client)
+        eid = entry["id"]
+        amazon = next(x for x in entry["listings"] if x["store"] == "amazon-in")
+        client.post(f"{ENTRIES}/{eid}/check")  # give it one observation
+
+        # "Session A" renames; "Session B" re-points a listing. Different rows, no loss.
+        assert client.patch(
+            f"{ENTRIES}/{eid}", json={"canonical_name": "Renamed by A"}
+        ).status_code == 200
+        assert client.patch(
+            f"{ENTRIES}/{eid}/listings/{amazon['id']}", json={"url": AMAZON_URL_2}
+        ).status_code == 200
+
+        final = client.get(f"{ENTRIES}/{eid}").json()
+        assert final["id"] == eid
+        assert final["product_name"] == "Renamed by A"
+        new_amazon = next(x for x in final["listings"] if x["store"] == "amazon-in")
+        assert new_amazon["id"] == amazon["id"]
+        assert new_amazon["url"] == AMAZON_URL_2
+        # Flipkart's earlier observation is still there.
+        history = client.get(f"{ENTRIES}/{eid}/history").json()
+        flipkart = next(s for s in history["listings"] if s["store"] == "flipkart")
+        assert len(flipkart["prices"]) >= 1
+
+    def test_out_of_stock_then_in_stock_is_recorded_as_a_transition(
+        self, client: TestClient
+    ) -> None:
+        stub_all()
+        eid = create(client)["id"]
+
+        respx.get(FLIPKART_URL).mock(
+            return_value=httpx.Response(200, html=load("flipkart_sold_out.html"))
+        )
+        client.post(f"{ENTRIES}/{eid}/check")
+        respx.get(FLIPKART_URL).mock(
+            return_value=httpx.Response(200, html=load("jsonld_in_stock.html"))
+        )
+        client.post(f"{ENTRIES}/{eid}/check")
+
+        history = client.get(f"{ENTRIES}/{eid}/history").json()
+        flipkart = next(s for s in history["listings"] if s["store"] == "flipkart")
+        # History is newest-first (the API convention), so the latest state is [0].
+        states = [row["availability"] for row in flipkart["availability"]]
+        assert "out_of_stock" in states
+        assert states[0] == "in_stock"
+

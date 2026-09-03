@@ -529,3 +529,64 @@ class TestListing:
 
         assert [item.id for item in active.items] == [kept.id]
         assert active.total == 1
+
+
+class TestFlipkartSideSymmetry:
+    """The URL-change and isolation logic is retailer-agnostic; the spec's §56 list names
+    both directions, so both are asserted rather than assumed from the Amazon case."""
+
+    def test_a_flipkart_url_change_re_points_and_keeps_history(
+        self, service: ProductEntryService, db_session: Session
+    ) -> None:
+        stub_all()
+        entry = make(service)
+        flipkart = next(x for x in entry.listings if x.store_slug == "flipkart")
+        old_product = flipkart.product_id
+        db_session.add(
+            PriceHistory(product_id=old_product, price=Decimal("79999.00"), currency="INR")
+        )
+        db_session.flush()
+
+        updated = service.update_listing(entry.id, flipkart.id, url=FLIPKART_URL_2)
+
+        assert updated.id == flipkart.id
+        assert updated.product_id != old_product
+        rows = (
+            db_session.execute(
+                select(PriceHistory).where(PriceHistory.product_id == old_product)
+            )
+            .scalars()
+            .all()
+        )
+        assert [row.price for row in rows] == [Decimal("79999.00")]
+
+    def test_a_flipkart_url_must_stay_flipkart(
+        self, service: ProductEntryService
+    ) -> None:
+        stub_all()
+        entry = make(service)
+        flipkart = next(x for x in entry.listings if x.store_slug == "flipkart")
+
+        with pytest.raises(InvalidStoreURLError, match="Flipkart"):
+            service.update_listing(entry.id, flipkart.id, url=AMAZON_URL_2)
+
+    def test_renaming_the_flipkart_listing_touches_no_history(
+        self, service: ProductEntryService
+    ) -> None:
+        stub_all()
+        entry = make(service)
+        flipkart = next(x for x in entry.listings if x.store_slug == "flipkart")
+        before = flipkart.product_id
+
+        service.update_listing(entry.id, flipkart.id, product_name="New Flipkart label")
+
+        assert flipkart.product_id == before
+        assert flipkart.product_name == "New Flipkart label"
+
+
+class TestConcurrentUpdate:
+    """Two overlapping edits to one entry must not lose data or corrupt history.
+
+    The design makes this safe by construction -- a rename writes one column, a URL change
+    writes a different row -- but §56 lists it, so it is pinned down rather than trusted.
+    """
