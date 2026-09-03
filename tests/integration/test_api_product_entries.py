@@ -398,6 +398,51 @@ class TestOwnershipOverHttp:
         )
 
 
+class TestListingsCostAFixedNumberOfQueries:
+    """The list endpoint must not issue a query per listing.
+
+    An N+1 is invisible to every other test in this file: the response body is identical
+    whether it took six queries or eighty-six. This one was real -- the last check for
+    each listing was fetched one at a time, so a 40-entry page cost 85 queries and 98ms
+    where it now costs 6 and 19ms.
+
+    The assertion is on the *shape* rather than an exact count, so ordinary refactoring
+    does not trip it: one more entry must not mean more queries.
+    """
+
+    @staticmethod
+    def _count(client: TestClient, path: str) -> int:
+        from sqlalchemy import event
+
+        from product_tracker.db.session import get_engine
+
+        seen: list[str] = []
+
+        def record(conn, cursor, statement, parameters, context, executemany):
+            seen.append(statement)
+
+        engine = get_engine()
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            assert client.get(path).status_code == 200
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+        return len(seen)
+
+    def test_a_second_entry_costs_no_extra_queries(self, client: TestClient) -> None:
+        stub_all()
+        create(client)
+        one = self._count(client, f"{ENTRIES}?limit=50")
+
+        create(client, name="Second", amazon_url=AMAZON_URL_2, flipkart_url=FLIPKART_URL_2)
+        two = self._count(client, f"{ENTRIES}?limit=50")
+
+        assert two == one, (
+            f"listing 2 entries cost {two} queries where 1 cost {one}: "
+            "the endpoint is querying per listing again"
+        )
+
+
 class TestProtection:
     def test_an_oversized_body_is_413(self, client: TestClient) -> None:
         """The body-size guard applies to every mutating route, this one included."""

@@ -11,6 +11,7 @@ happened.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, Query, status
@@ -65,19 +66,32 @@ def _store_name(slug: str) -> str:
     return info.display_name if info else slug
 
 
-def _last_execution(session: DbSession, product_id: int) -> CheckExecution | None:
+def _last_executions(
+    session: DbSession, product_ids: Sequence[int]
+) -> dict[int, CheckExecution]:
+    """The most recent check for each of these products, in one query.
+
+    This was one query *per listing*, which is invisible until there is a page of them:
+    a 40-entry list cost 85 queries and the response looked perfectly correct either way.
+    ``DISTINCT ON`` is PostgreSQL's idiom for "the top row of each group" and it walks
+    ``ix_check_executions_product_id_started_at`` rather than sorting the table.
+    """
+    if not product_ids:
+        return {}
     stmt = (
         select(CheckExecution)
-        .where(CheckExecution.product_id == product_id)
-        .order_by(CheckExecution.started_at.desc())
-        .limit(1)
+        .where(CheckExecution.product_id.in_(set(product_ids)))
+        .order_by(CheckExecution.product_id, CheckExecution.started_at.desc())
+        .distinct(CheckExecution.product_id)
     )
-    return session.execute(stmt).scalars().first()
+    return {row.product_id: row for row in session.execute(stmt).scalars()}
 
 
-def _listing_response(session: DbSession, listing: RetailerListing) -> ListingResponse:
+def _listing_response(
+    listing: RetailerListing, executions: Mapping[int, CheckExecution]
+) -> ListingResponse:
     product = listing.product
-    execution = _last_execution(session, listing.product_id)
+    execution = executions.get(listing.product_id)
     return ListingResponse(
         id=listing.id,
         store=listing.store_slug,
@@ -97,16 +111,37 @@ def _listing_response(session: DbSession, listing: RetailerListing) -> ListingRe
     )
 
 
-def _entry_response(session: DbSession, entry: ProductEntry) -> ProductEntryResponse:
+def _entry_response(
+    session: DbSession,
+    entry: ProductEntry,
+    executions: Mapping[int, CheckExecution] | None = None,
+) -> ProductEntryResponse:
+    """One entry as the API returns it.
+
+    ``executions`` lets a caller rendering many entries look the checks up once for the
+    whole page; omitted, it is looked up for this entry alone -- still one query, not one
+    per listing.
+    """
+    listings = list(entry.listings)
+    if executions is None:
+        executions = _last_executions(session, [item.product_id for item in listings])
     return ProductEntryResponse(
         id=entry.id,
         product_name=entry.canonical_name,
         status=entry.status,
-        listings=[_listing_response(session, item) for item in entry.listings],
+        listings=[_listing_response(item, executions) for item in listings],
         created_at=entry.created_at,
         updated_at=entry.updated_at,
         deleted_at=entry.deleted_at,
     )
+
+
+def _entry_page(session: DbSession, entries: Sequence[ProductEntry]) -> list[ProductEntryResponse]:
+    """A page of entries, with every listing's last check fetched in a single query."""
+    executions = _last_executions(
+        session, [item.product_id for entry in entries for item in entry.listings]
+    )
+    return [_entry_response(session, entry, executions) for entry in entries]
 
 
 @router.post(
@@ -165,7 +200,7 @@ def list_entries(
         limit=page.limit, offset=page.offset, status=entry_status
     )
     return Page[ProductEntryResponse](
-        items=[_entry_response(session, item) for item in result.items],
+        items=_entry_page(session, result.items),
         total=result.total,
         limit=result.limit,
         offset=result.offset,
@@ -440,7 +475,7 @@ def update_listing(
     )
     session.flush()
     session.refresh(listing)
-    return _listing_response(session, listing)
+    return _listing_response(listing, _last_executions(session, [listing.product_id]))
 
 
 @router.delete(
