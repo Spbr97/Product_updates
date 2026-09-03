@@ -1,0 +1,226 @@
+// Typed client for the Product Entry endpoints under /api/v1.
+//
+// The UI owns no business rules -- it renders what the API returns and posts back what a
+// person typed. Every shape here mirrors a Pydantic schema in
+// src/product_tracker/api/schemas/product_entries.py; money fields arrive as decimal
+// strings, not numbers, so they are kept as strings and formatted at the edge.
+
+export type ProductEntryStatus = "active" | "archived";
+export type Availability = "in_stock" | "out_of_stock" | "unavailable" | "unknown";
+export type TrackingStatus = "active" | "paused";
+export type CheckStatus = "success" | "failed" | "partial" | "skipped";
+
+export interface ListingResponse {
+  id: number;
+  store: string;
+  store_name: string;
+  product_name: string;
+  url: string;
+  product_id: number;
+  price: string | null;
+  currency: string | null;
+  availability: Availability;
+  tracking_status: TrackingStatus;
+  last_checked_at: string | null;
+  last_check_status: CheckStatus | null;
+  last_check_error: string | null;
+  is_active: boolean;
+  deactivated_at: string | null;
+}
+
+export interface ProductEntry {
+  id: number;
+  product_name: string;
+  status: ProductEntryStatus;
+  listings: ListingResponse[];
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface Page<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ListingCheckResult {
+  listing_id: number;
+  store: string;
+  status: CheckStatus;
+  price: string | null;
+  currency: string | null;
+  availability: Availability | null;
+  error_type: string | null;
+  error_detail: string | null;
+}
+
+export interface EntryCheckResponse {
+  product_entry_id: number;
+  results: ListingCheckResult[];
+}
+
+export interface PricePoint {
+  price: string;
+  currency: string;
+  observed_at: string;
+}
+export interface AvailabilityPoint {
+  availability: Availability;
+  observed_at: string;
+}
+export interface ListingHistory {
+  listing_id: number;
+  store: string;
+  store_name: string;
+  prices: PricePoint[];
+  availability: AvailabilityPoint[];
+}
+export interface EntryHistory {
+  product_entry_id: number;
+  listings: ListingHistory[];
+}
+
+export interface ListingStats {
+  listing_id: number;
+  store: string;
+  store_name: string;
+  currency: string | null;
+  observations: number;
+  current: string | null;
+  lowest: string | null;
+  highest: string | null;
+  average: string | null;
+  lowest_at: string | null;
+  first_observed_at: string | null;
+  changed_by: string | null;
+  mixed_currency: boolean;
+}
+export interface EntryStats {
+  product_entry_id: number;
+  listings: ListingStats[];
+}
+
+export interface ListingInput {
+  product_name: string;
+  url: string;
+}
+export interface CreatePayload {
+  product_name: string;
+  amazon: ListingInput;
+  flipkart: ListingInput;
+}
+
+/** The one error shape the API ever returns. */
+export class ApiError extends Error {
+  readonly status: number;
+  /** Stable machine code: "duplicate_listing", "invalid_store_url", "not_found", ... */
+  readonly type: string;
+
+  constructor(status: number, type: string, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+const BASE = "/api/v1";
+
+/**
+ * The key, if a person pasted one on the login screen. A browser form cannot send a
+ * header, so the API also accepts it as a `pt_key` cookie -- but keeping it here lets the
+ * SPA send the header directly, which is the documented path.
+ */
+function apiKey(): string | null {
+  try {
+    return window.localStorage.getItem("pt_key");
+  } catch {
+    return null;
+  }
+}
+
+export function setApiKey(key: string | null): void {
+  try {
+    if (key) window.localStorage.setItem("pt_key", key);
+    else window.localStorage.removeItem("pt_key");
+  } catch {
+    /* private mode: the cookie path still works for reads on an open install */
+  }
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const key = apiKey();
+  if (key) headers["X-API-Key"] = key;
+
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  if (res.status === 204) return undefined as T;
+
+  const text = await res.text();
+  const parsed = text ? JSON.parse(text) : null;
+
+  if (!res.ok) {
+    const err = parsed?.error ?? {};
+    throw new ApiError(
+      res.status,
+      err.type ?? "error",
+      err.message ?? `Request failed (${res.status})`,
+    );
+  }
+  return parsed as T;
+}
+
+export const api = {
+  listEntries: (status: ProductEntryStatus = "active") =>
+    request<Page<ProductEntry>>(
+      "GET",
+      `/product-entries?status=${status}&limit=100`,
+    ),
+  getEntry: (id: number) =>
+    request<ProductEntry>("GET", `/product-entries/${id}`),
+  createEntry: (payload: CreatePayload) =>
+    request<ProductEntry>("POST", "/product-entries", payload),
+  renameEntry: (id: number, canonical_name: string) =>
+    request<ProductEntry>("PATCH", `/product-entries/${id}`, { canonical_name }),
+  archiveEntry: (id: number) =>
+    request<void>("DELETE", `/product-entries/${id}`),
+  checkEntry: (id: number) =>
+    request<EntryCheckResponse>("POST", `/product-entries/${id}/check`),
+  checkListing: (id: number, listingId: number) =>
+    request<EntryCheckResponse>(
+      "POST",
+      `/product-entries/${id}/listings/${listingId}/check`,
+    ),
+  pauseEntry: (id: number) =>
+    request<ProductEntry>("POST", `/product-entries/${id}/pause`),
+  resumeEntry: (id: number) =>
+    request<ProductEntry>("POST", `/product-entries/${id}/resume`),
+  updateListing: (
+    id: number,
+    listingId: number,
+    patch: { product_name?: string; url?: string },
+  ) =>
+    request<ListingResponse>(
+      "PATCH",
+      `/product-entries/${id}/listings/${listingId}`,
+      patch,
+    ),
+  deactivateListing: (id: number, listingId: number) =>
+    request<void>("DELETE", `/product-entries/${id}/listings/${listingId}`),
+  history: (id: number) =>
+    request<EntryHistory>("GET", `/product-entries/${id}/history`),
+  stats: (id: number) =>
+    request<EntryStats>("GET", `/product-entries/${id}/stats`),
+};

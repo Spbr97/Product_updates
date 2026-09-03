@@ -11,10 +11,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import APIRouter, FastAPI
-from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
 from ..core.config import Settings, get_settings
@@ -113,17 +111,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(build_v1_router())
 
-    # The pages, and the one stylesheet they need. Mounted last and outside the versioned
-    # router: a browser page is not an API resource and must not inherit its read guard's
-    # JSON 401, which a person cannot act on.
-    from ..web.routes import router as ui_router
+    # The Product Entry SPA, mounted last and outside the versioned router: the shell is
+    # a static file with no auth, and the app calls /api/v1 like any other client.
+    from ..web.serve import mount_ui
 
-    app.include_router(ui_router)
-    app.mount(
-        "/ui/static",
-        StaticFiles(directory=str(Path(__file__).parent.parent / "web" / "static")),
-        name="ui-static",
-    )
+    mount_ui(app)
 
     return app
 

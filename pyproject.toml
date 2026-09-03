@@ -10,10 +10,6 @@ dependencies = [
   "beautifulsoup4>=4.12",
   "fastapi>=0.115",
   "httpx>=0.27",
-  # Server-rendered Product Entry pages: Jinja2 for the templates, python-multipart
-  # for the HTML form posts. FastAPI needs both declared explicitly.
-  "jinja2>=3.1",
-  "python-multipart>=0.0.9",
   "psycopg[binary]>=3.1",
   "pydantic>=2.7",
   "pydantic-settings>=2.2",
@@ -52,11 +48,11 @@ product_tracker = [
   "stores/selectors/*.yaml",
   "stores/searches/*.yaml",
   "services/spec_profiles/*.yaml",
-  # The Product Entry pages. Without these the wheel installs the routes but not the
-  # things they render, and the API refuses to start on a missing static directory --
-  # which only shows up in a container, never in an editable install.
-  "web/templates/*.html",
-  "web/static/*.css",
+  # The built Product Entry SPA (frontend/ -> web/app/ via `npm run build`). Absent on
+  # a fresh checkout; CI and Docker build it before packaging. When missing, the API
+  # starts without /ui rather than failing.
+  "web/app/index.html",
+  "web/app/assets/*",
 ]
 
 [tool.pytest.ini_options]

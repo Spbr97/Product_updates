@@ -1,5 +1,5 @@
-/* One stylesheet, no build step. Tones are named for what they mean -- good, caution,
-   bad, muted -- so the template never has to know a colour, and "we could not read this"
+/* One stylesheet, bundled by Vite. Tones are named for what they mean -- good, caution,
+   bad, muted -- so a component never hard-codes a colour, and "we could not read this"
    never accidentally borrows the styling of "this is sold out". */
 
 :root {

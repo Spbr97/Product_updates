@@ -16,3 +16,9 @@ docs
 tests
 *.md
 !README.md
+
+# Frontend: the Dockerfile's node stage installs and builds from the checked-in
+# sources; node_modules and any host build output must not enter the context.
+frontend/node_modules
+frontend/dist
+src/product_tracker/web/app

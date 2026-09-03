@@ -9,6 +9,19 @@
 #
 ARG BASE_IMAGE=python:3.12-slim
 
+# --- Stage 1: build the Product Entry SPA -------------------------------------------
+# Node is a build-time tool only; it never enters the runtime image. The output is a
+# handful of static files under src/product_tracker/web/app/ that the API serves at /ui.
+FROM node:20-slim AS frontend
+
+WORKDIR /ui
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+# vite writes the bundle to /src/product_tracker/web/app (see outDir in vite.config.ts).
+RUN npm run build
+
+
 FROM ${BASE_IMAGE} AS base
 
 ARG EXTRAS=""
@@ -28,6 +41,8 @@ RUN apt-get update \
 # Copy dependency metadata first so `pip install` is cached across source edits.
 COPY pyproject.toml README.md ./
 COPY src ./src
+# The built SPA, from stage 1, so the wheel's package-data has something to ship.
+COPY --from=frontend /src/product_tracker/web/app ./src/product_tracker/web/app
 
 RUN if [ -n "${EXTRAS}" ]; then pip install ".[${EXTRAS}]"; else pip install "."; fi
 

@@ -42,6 +42,13 @@ Amazon or Slack is a new file rather than an edit to the core.
 | Services | `services/` | All the decisions. Talks to repositories and to interfaces. |
 | Plugins | `stores/`, `notifications/` | Implement an interface. Registered, never imported by the engine. |
 | Delivery | `api/`, `cli/`, `scheduler/`, `workers/` | Translate the outside world into service calls. |
+| Web UI | `frontend/` (React SPA) + `web/` (serves it) | A pure client of `/api/v1`. No server-side rendering, no business logic. |
+
+The web UI is deliberately outside the Python process's logic: `frontend/` builds to static
+files, `web/serve.py` mounts them at `/ui`, and the browser calls `/api/v1` like any other
+client. The eight-state listing resolver and the retailer-field rules live in TypeScript
+with a Vitest suite; the Python side only checks the bundle is served. Keeping the UI a
+separate build means it can grow — or be replaced — without touching the API.
 
 ### Why `domain/models.py` and `db/models.py` both exist
 

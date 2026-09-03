@@ -199,7 +199,8 @@ src/product_tracker/
   scheduler/     JobQueue interface, APScheduler implementation, throttling
   workers/       Entrypoints invoked by scheduled jobs
   api/           FastAPI app factory, routers, schemas, dependencies, error envelope
-  web/           Server-rendered Product Entry pages (Jinja2 templates, one CSS file)
+  web/           Serves the built Product Entry SPA at /ui (static files, no logic)
+frontend/        The SPA itself: React + Vite + TypeScript, Vitest tests. Builds to web/app/
   cli/           Typer commands
   utils/         URL validation/SSRF guard, money parsing
 migrations/      Alembic environment and versions
@@ -211,6 +212,8 @@ tests/           unit/ (no I/O), integration/ (real PostgreSQL), fixtures/ (save
 
 - **Python 3.12+**
 - **PostgreSQL 14+** (16 recommended; compose provides it)
+- **Node 20+** — only to build or develop the web UI (`frontend/`). The API and CLI need
+  no Node; the Docker image builds the UI in its own stage.
 - **Docker + Docker Compose** — optional, but the easiest way to get PostgreSQL
 - **Playwright + Chromium** — optional, only for sites needing JavaScript rendering
 
@@ -455,29 +458,43 @@ product-tracker check-all [--limit 100]
 product-tracker status / config / stores list
 ```
 
-## 9a. The web pages
+## 9a. The web UI
 
-Server-rendered, no build step and no Node. Start the API and open:
+A React single-page app in `frontend/`, built to static files that the API serves at
+`/ui`. It is a pure client of `/api/v1` — no server-side rendering, no business logic in
+the web layer — so the page and the API cannot drift apart.
 
+```powershell
+# Develop against a running API (Vite dev server, proxies /api to :8000):
+cd frontend
+npm install
+npm run dev            # http://localhost:5173/ui/
+
+# Or build once and let the API serve it:
+npm run build          # -> src/product_tracker/web/app/
+uvicorn product_tracker.api.app:get_app --factory     # then open /ui
 ```
-http://127.0.0.1:8000/ui/products        # everything you track, both shops per row
-http://127.0.0.1:8000/ui/products/new    # the Add Product form
-```
 
-The form takes a product name plus a name and URL for each shop. It validates the retailer
-of each link, keeps every field filled in when something is rejected, and disables its own
-submit button so a double click cannot become a second product.
+When the bundle has not been built, the API still starts — it simply has no `/ui` (a
+one-line warning says why). CI and the Docker image build it automatically.
 
-The detail page shows each shop as its own panel with a "Check now" that refreshes only
-that panel, a comparison table marking the cheapest, and each shop's recent prices in its
-own section. It distinguishes **eight** states — not checked, in stock, out of stock, stock
-unknown, shop refused us, check failed, check skipped, paused — because a shop that blocked
-us and a product that is sold out are different facts, and showing both as "Out of stock"
-would make the whole tool untrustworthy.
+Pages: `/ui/products` (everything you track, one row per entry, a column per shop),
+`/ui/products/new` (the Add Product form), `/ui/products/:id` (detail: per-shop panels, a
+comparison table marking the cheapest, per-shop history and statistics).
 
-Authentication follows the API. With no `API_KEY` set (the localhost default) the pages
-just work; where keys are in use the pages accept one from a `pt_key` cookie, since a
-browser form cannot send a header.
+The form validates the retailer of each link, keeps every field filled in when something
+is rejected, and disables its own submit so a double click cannot become a second product.
+The detail page distinguishes **eight** listing states — not checked, in stock, out of
+stock, stock unknown, shop refused us, check failed, check skipped, paused — because a
+shop that blocked us and a product that is sold out are different facts, and rendering
+both as "Out of stock" would make the whole tool untrustworthy.
+
+Auth follows the API. With no `API_KEY` (the localhost default) it just works; where keys
+are in use the app sends `X-API-Key` from a value in `localStorage` under `pt_key`.
+
+Tests: `cd frontend && npm test` (Vitest + Testing Library, the API mocked with MSW) —
+covers the SDD §58 list. The Python side (`tests/ui/`) checks only that the bundle is
+served correctly at `/ui`.
 
 ## 10. Running the scheduler/workers
 
