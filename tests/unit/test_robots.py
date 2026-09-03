@@ -213,6 +213,32 @@ class TestGroupsThatApplyToUs:
         assert robots.rules_for("", "product-tracker-test") == ["User-agent: *"]
 
 
+class TestRulesComeOutMostSpecificFirst:
+    """Ordering is load-bearing, because the parsers disagree about precedence.
+
+    Given ``Allow: /`` and ``Disallow: /search?`` and asked about ``/search?q=x``,
+    Python 3.12 takes the first matching rule (Allow) while 3.13 and 3.14 take the
+    longest match (Disallow). Only one of those obeys RFC 9309, and on 3.12 the
+    difference meant crawling a path the site asked us to leave alone -- so the order is
+    fixed here rather than left to the interpreter.
+    """
+
+    def test_the_longer_path_is_emitted_first(self) -> None:
+        body = "\n".join(["User-agent: *", "Allow: /", "Disallow: /search?"])
+
+        assert robots.rules_for(body, "product-tracker-test") == [
+            "User-agent: *",
+            "Disallow: /search?",
+            "Allow: /",
+        ]
+
+    def test_allow_wins_a_tie(self) -> None:
+        """RFC 9309: at equal length, the least restrictive rule wins."""
+        body = "\n".join(["User-agent: *", "Disallow: /abc", "Allow: /abc"])
+
+        assert robots.rules_for(body, "product-tracker-test")[1] == "Allow: /abc"
+
+
 class TestMergedRulesAreEnforced:
     """The point of merging: the verdict must not depend on the interpreter."""
 

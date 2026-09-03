@@ -125,6 +125,21 @@ def rules_for(body: str, user_agent: str) -> list[str]:
     * **A group naming us wins over the wildcard.** That is what "most specific group"
       means in RFC 9309: if a site has written rules for our agent by name, its ``*``
       rules are not also applied on top.
+    * **Rules come out most-specific first**, because the parsers disagree about
+      precedence and we must not. Measured on the same input
+      (``Allow: /`` plus ``Disallow: /search?``, asking about ``/search?q=x``):
+
+      =========  =====================================  =========
+      Python     rule chosen                            verdict
+      =========  =====================================  =========
+      3.12       the first one that matches -> Allow    fetch it
+      3.13/3.14  the longest match -> Disallow          leave it
+      =========  =====================================  =========
+
+      Ordering by descending path length makes RFC 9309's precedence explicit in the
+      input, so every interpreter reaches the disallow first and agrees. Getting this
+      wrong is not a test detail: on 3.12 it meant crawling a path the site asked us to
+      leave alone.
 
     Returns lines, ready for ``RobotFileParser.parse``. A file with no group for us comes
     back as an empty group, which permits everything -- the site said nothing about us.
@@ -161,7 +176,18 @@ def rules_for(body: str, user_agent: str) -> list[str]:
         elif any(a.strip() == "*" for a in agents):
             wildcard.append(rule)
 
-    return ["User-agent: *", *(named or wildcard)]
+    return ["User-agent: *", *sorted(named or wildcard, key=_specificity)]
+
+
+def _specificity(rule: str) -> tuple[int, int]:
+    """Sort key putting the rule RFC 9309 says wins first.
+
+    Longest path first; on an equal-length tie the RFC gives Allow the win, so it sorts
+    ahead of Disallow. Every parser here takes *some* rule from this list -- the first
+    match or the longest -- and this ordering makes those the same rule.
+    """
+    field, _, value = rule.partition(":")
+    return -len(value.strip()), 0 if field.strip().lower() == "allow" else 1
 
 
 def is_allowed(url: str, ctx: FetchContext) -> bool:

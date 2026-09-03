@@ -655,6 +655,19 @@ suite never depends on Amazon or Flipkart being online.
   asserts that the database-backed tests were actually *collected*: a broken
   `TEST_DATABASE_URL` would otherwise skip ~350 tests and still report green, which is
   worse than a red build.
+
+  **A green run locally does not mean a green run here.** The matrix exists because the
+  standard library changes behaviour between versions in ways that change what this
+  program fetches: `urllib.robotparser` on 3.12 honours the *first* matching rule while
+  3.13+ honour the *longest*, so the same robots.txt permitted a path on one and
+  forbade it on the other. That shipped, and was only caught by reading CI. If your
+  virtualenv is not 3.12, run the oldest supported version before trusting a local pass:
+
+  ```bash
+  docker run --rm --network product-tracker_default -v "$PWD:/src:ro" -w /work \
+    python:3.12-slim bash -c 'cp -r /src/. /work/ && pip install -q -e ".[dev]" &&
+    TEST_DATABASE_URL=postgresql+psycopg://tracker:tracker@db:5432/ci312 pytest -q'
+  ```
 - **migrations** — up, down to base, and up again. The second upgrade is the point: it
   catches anything created but not dropped, such as an enum type. It also renders the
   offline SQL and checks for `VALUES (NULL`, a bug this project has actually shipped.
