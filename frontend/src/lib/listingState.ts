@@ -48,6 +48,13 @@ const VIEWS = {
     explanation:
       "The page loaded but published nothing reliable about availability. Unknown is the honest answer; it does not mean out of stock.",
   },
+  needs_location: {
+    key: "needs_location",
+    label: "Needs a delivery area",
+    tone: "caution",
+    explanation:
+      "This shop prices and stocks per delivery area, and we could not set one -- doing so needs a browser session we do not keep. Whatever the page said about stock was about our missing address, not about this product.",
+  },
   blocked: {
     key: "blocked",
     label: "Shop refused us",
@@ -105,9 +112,17 @@ export function describe(listing: ListingResponse): StateView {
   if (listing.last_check_status === "skipped") return VIEWS.skipped;
 
   // A shop's own statement about stock outranks how the check was classified: a listing
-  // can be read perfectly and still be sold out.
+  // can be read perfectly and still be sold out. This sits above needs_location on
+  // purpose -- where a shop did tell us its stock, saying "needs a delivery area"
+  // instead would discard a real finding to explain a missing price.
   if (listing.availability === "out_of_stock") return VIEWS.out_of_stock;
   if (listing.availability === "in_stock") return VIEWS.in_stock;
+
+  // Nothing definite about stock, and the backend knows why: this shop will not answer
+  // without a delivery area. Above "unknown" because it is the same honesty with a
+  // reason attached, and the reason is the difference between a user retrying forever
+  // and a user understanding that this shop cannot be tracked from here.
+  if (listing.last_check_error === "needs_location") return VIEWS.needs_location;
 
   if (listing.last_check_error && BLOCKED_ERRORS.has(listing.last_check_error)) {
     return VIEWS.blocked;

@@ -53,6 +53,35 @@ describe("listing state resolver (port of presenters.py)", () => {
     ).toBe("out_of_stock");
   });
 
+  it("a shop that needs a delivery area says so, rather than just 'unknown'", () => {
+    const v = describeState(
+      listing({
+        store: "blinkit",
+        last_checked_at: "2026-09-03T00:00:00Z",
+        last_check_status: "partial",
+        last_check_error: "needs_location",
+      }),
+    );
+    expect(v.key).toBe("needs_location");
+    // The whole point of the state: it must never read as a fact about the product.
+    expect(v.label).not.toMatch(/out of stock/i);
+    expect(v.explanation).toMatch(/delivery area/i);
+  });
+
+  it("a shop that did tell us its stock keeps that answer", () => {
+    // Above needs_location on purpose. Relabelling a real in_stock reading to explain a
+    // missing price would discard a finding -- the mistake this whole module avoids.
+    const v = describeState(
+      listing({
+        availability: "in_stock",
+        last_checked_at: "2026-09-03T00:00:00Z",
+        last_check_status: "partial",
+        last_check_error: "needs_location",
+      }),
+    );
+    expect(v.key).toBe("in_stock");
+  });
+
   it("a paused listing says paused whatever the last check was", () => {
     const v = describeState(
       listing({

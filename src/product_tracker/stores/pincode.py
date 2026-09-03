@@ -53,6 +53,21 @@ class PincodeRule:
     ``needs_js`` and ``location_independent`` are mutually exclusive claims about the
     shop: the first says the price depends on an area we cannot set without a browser
     session, the second says it does not depend on one at all.
+
+    **The two flags are held to different standards of evidence, because they cost
+    different things when wrong.**
+
+    ``needs_js`` only ever relabels an extraction that already failed, so being wrong
+    costs a misleading diagnosis -- "set a delivery area" when the real answer was "fix
+    the selectors". Note that a shop handing us a price on a cold request does *not*
+    disprove it: getting *a* price from an unstated area is the exact problem this module
+    describes, not evidence against it.
+
+    ``stock_gated_by_area`` discards the shop's own stock claims, so being wrong throws
+    away real findings -- quieter than the bug it prevents and just as dishonest. It may
+    only be set where that behaviour was *observed*. BigBasket is why this paragraph
+    exists: it was marked stock-gated on reasoning alone, and a cold fetch then returned
+    a real price and ``unknown`` availability.
     """
 
     #: Cookie names whose value is the bare PIN code. Empty for every host today.
@@ -102,12 +117,17 @@ RULES: dict[str, PincodeRule] = {
     ),
     "croma.com": PincodeRule(
         needs_js=True,
-        note="Stock and delivery promise are per area. Croma blocks automated access at "
-        "the edge, so a check rarely gets far enough for this to be the reason.",
+        note="Stock and delivery promise are per area. In practice this entry is inert: "
+        "measured 2026-09-03, Croma answers 403 at the edge, so a check never reaches a "
+        "page and escalate() is never given anything to relabel. Kept so the reasoning "
+        "is on record if the block ever lifts.",
     ),
     "reliancedigital.in": PincodeRule(
         needs_js=True,
-        note="Availability is resolved per serviceable area after the page loads.",
+        note="Availability and delivery promise are resolved per serviceable area. "
+        "Measured 2026-09-03: a cold fetch returns a real price and in_stock, which is "
+        "the default area's answer, not a national one -- so this stays needs_js. It "
+        "reads cleanly today, so escalate() is rarely reached.",
     ),
     # Two national-pricing shops. This reflects what the catalogue records about them
     # rather than a measurement of their pincode behaviour -- so they are marked as
