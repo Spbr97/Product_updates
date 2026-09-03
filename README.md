@@ -193,10 +193,13 @@ src/product_tracker/
   repositories/  Data access, one class per aggregate. Never commits.
   stores/        StoreAdapter interface, registry, per-store adapters, selector configs
   notifications/ NotificationProvider interface, registry, per-channel providers
-  services/      Tracking engine, rule engine, statistics, change detection
+  services/      Tracking + rule engines, statistics, change detection, comparison,
+                 discovery/search, spec reading, variants, query policy, Product Entries
+  services/spec_profiles/  Category YAML (phone, earbuds, powerbank, generic)
   scheduler/     JobQueue interface, APScheduler implementation, throttling
   workers/       Entrypoints invoked by scheduled jobs
   api/           FastAPI app factory, routers, schemas, dependencies, error envelope
+  web/           Server-rendered Product Entry pages (Jinja2 templates, one CSS file)
   cli/           Typer commands
   utils/         URL validation/SSRF guard, money parsing
 migrations/      Alembic environment and versions
@@ -302,6 +305,15 @@ uvicorn product_tracker.api.app:get_app --factory --reload
 - `/api/v1/alerts/{id}` — `GET` one, `DELETE` to remove.
 - `/api/v1/products/{id}/pause` and `/resume` — stop or restart scheduled checks.
 - `/api/v1/stores` — supported stores, from the adapter registry.
+- `/api/v1/groups` — `POST` to create a comparison group (name, optional brand/slug),
+  `GET` to list. A group organises one product across its models and the shops selling it.
+- `/api/v1/groups/{slug}` — `GET` one, `DELETE` to remove. Deleting a group leaves every
+  listing and all history untouched.
+- `/api/v1/groups/{slug}/listings` — `POST` to attach a tracked product to the group by
+  id; `DELETE .../{product_id}` to detach. Neither touches the listing or its history.
+- `/api/v1/groups/{slug}/compare` — `GET` the price grid: models down the side, shops
+  across the top. `?stale_hours=` flags cells not checked recently; a blocked or failed
+  cell reads as that, never as a blank or a zero.
 - `/api/v1/product-entries` — `POST` to create one entry with its Amazon and Flipkart
   listings in a single transaction, `GET` to list (paginated, filter by `status`). The
   Amazon field refuses a Flipkart link and vice versa; a URL already live in one of your
@@ -342,6 +354,37 @@ X-API-Key: <your key>
 Reads stay anonymous unless you also set `API_ALLOW_ANONYMOUS_READS=false`. The key is
 compared in constant time, a 401 advertises the scheme in `WWW-Authenticate`, and the
 health probes never require a credential — a probe should not need one.
+
+### Accounts and multi-user auth
+
+There are two kinds of credential, sent the same way — `X-API-Key`.
+
+- **One deployment-wide key.** Set `API_KEY`; every request that presents it authenticates
+  as the default account (`local@localhost`). This is the single-user setup.
+- **Per-account keys.** `product-tracker users add <email>` creates an account and issues
+  it a key. Each key is a distinct identity, and everything a request touches — watchlist,
+  groups, alerts, Product Entries — is scoped to that account. `MAX_LISTINGS_PER_USER` and
+  friends are per account.
+
+How a request's identity is resolved (`services/user_service.resolve_user`):
+
+1. Auth disabled (no `API_KEY`, no account holds a key) → the default account.
+2. No key presented → `401`.
+3. Key equals the deployment `API_KEY` → the default account.
+4. Otherwise the key is hashed and looked up → that account, or `401` if it matches none.
+
+**Anonymous reads have a cutover.** `API_ALLOW_ANONYMOUS_READS=true` only holds while no
+account has its own key. The moment one does, an unkeyed read is `401` as well — a read
+now returns one person's data, and an unidentified caller cannot be scoped to it. To keep
+a single-user install open, set `API_KEY` or give the default account a key.
+
+Rotation is clean: `product-tracker users rotate-key <email>` invalidates the old key
+immediately, with no overlap window.
+
+**Accounts are provisioned from the CLI only** — `product-tracker users add | list |
+rotate-key | set-active | remove`. There is no `/api/v1/users`: the API authenticates
+requests, it does not create the accounts they authenticate as. That is an operator task,
+and the CLI is the operator's console (it runs unauthenticated, on the machine).
 
 Every error response uses one envelope:
 
