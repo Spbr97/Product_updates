@@ -1,7 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type ProductEntry, type ProductEntryStatus } from "../api";
-import { describe, priceText } from "../lib/listingState";
+import {
+  STATE_ORDER,
+  STATE_VIEWS,
+  describe,
+  priceText,
+  type StateKey,
+} from "../lib/listingState";
 
 const COLUMNS = ["amazon-in", "flipkart"] as const;
 const COLUMN_NAMES: Record<string, string> = {
@@ -30,6 +36,38 @@ export function ProductList() {
   }, [status]);
 
   const archived = status === "archived";
+  const state = params.get("state") as StateKey | null;
+
+  /**
+   * How many entries have at least one shop in each state.
+   *
+   * Counted over entries rather than listings because the list shows one row per entry:
+   * a count of 3 has to mean three rows will remain, or the filter lies about itself.
+   */
+  const counts = useMemo(() => {
+    const tally = new Map<StateKey, number>();
+    for (const entry of entries ?? []) {
+      const states = new Set(
+        entry.listings.map((l) => describe(l).key as StateKey),
+      );
+      for (const key of states) tally.set(key, (tally.get(key) ?? 0) + 1);
+    }
+    return tally;
+  }, [entries]);
+
+  const shown = useMemo(() => {
+    if (entries === null || state === null) return entries;
+    return entries.filter((entry) =>
+      entry.listings.some((l) => describe(l).key === state),
+    );
+  }, [entries, state]);
+
+  function setState(next: StateKey | null): void {
+    const params_: Record<string, string> = {};
+    if (archived) params_.status = "archived";
+    if (next) params_.state = next;
+    setParams(params_);
+  }
 
   return (
     <>
@@ -37,7 +75,11 @@ export function ProductList() {
         <div>
           <h1>Products</h1>
           <p className="lede">
-            {entries === null ? "…" : `${entries.length} tracked`}
+            {entries === null
+              ? "…"
+              : state === null
+                ? `${entries.length} tracked`
+                : `${shown?.length ?? 0} of ${entries.length} tracked`}
             {archived ? " (archived)" : ""}.
           </p>
         </div>
@@ -62,6 +104,38 @@ export function ProductList() {
         </div>
       )}
 
+      {entries !== null && entries.length > 0 && (
+        <div className="filters" role="group" aria-label="Filter by state">
+          <button
+            className={`chip${state === null ? " on" : ""}`}
+            aria-pressed={state === null}
+            onClick={() => setState(null)}
+          >
+            All <span className="count">{entries.length}</span>
+          </button>
+          {STATE_ORDER.filter((key) => counts.has(key)).map((key) => (
+            <button
+              key={key}
+              className={`chip ${STATE_VIEWS[key].tone}${state === key ? " on" : ""}`}
+              aria-pressed={state === key}
+              onClick={() => setState(state === key ? null : key)}
+              title={STATE_VIEWS[key].explanation}
+            >
+              {STATE_VIEWS[key].label} <span className="count">{counts.get(key)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {shown !== null && entries !== null && entries.length > 0 && shown.length === 0 && (
+        <div className="card empty">
+          <p>No product is in that state right now.</p>
+          <button className="button ghost" onClick={() => setState(null)}>
+            Show all {entries.length}
+          </button>
+        </div>
+      )}
+
       {entries !== null && entries.length === 0 && (
         <div className="card empty">
           <p>Nothing here yet.</p>
@@ -75,7 +149,7 @@ export function ProductList() {
         </div>
       )}
 
-      {entries !== null && entries.length > 0 && (
+      {shown !== null && shown.length > 0 && (
         <table className="listing">
           <thead>
             <tr>
@@ -88,7 +162,7 @@ export function ProductList() {
             </tr>
           </thead>
           <tbody>
-            {entries.map((entry) => {
+            {shown.map((entry) => {
               const byStore = new Map(
                 entry.listings.filter((l) => l.is_active).map((l) => [l.store, l]),
               );

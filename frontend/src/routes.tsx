@@ -4,6 +4,8 @@ import { ProductList } from "./pages/ProductList";
 import { AddProduct } from "./pages/AddProduct";
 import { EntryDetail } from "./pages/EntryDetail";
 import { EntryEdit } from "./pages/EntryEdit";
+import { GroupList } from "./pages/GroupList";
+import { GroupCompare } from "./pages/GroupCompare";
 
 /**
  * The classic (non-data) router tree. No loaders or actions -- every page fetches in a
@@ -20,6 +22,8 @@ export function AppRoutes() {
         <Route path="products/new" element={<AddProduct />} />
         <Route path="products/:id" element={<EntryDetail />} />
         <Route path="products/:id/edit" element={<EntryEdit />} />
+        <Route path="compare" element={<GroupList />} />
+        <Route path="compare/:slug" element={<GroupCompare />} />
       </Route>
     </Routes>
   );

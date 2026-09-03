@@ -102,6 +102,76 @@ export interface EntryStats {
   listings: ListingStats[];
 }
 
+// --- Product groups and the comparison grid --------------------------------------
+//
+// A group is one product across several *models* (down the side) and several *shops*
+// (across the top). The cell status is the field to branch on, never `price === null`:
+// four very different situations produce a null price and only one of them says
+// anything about the product.
+
+export type CellStatus =
+  | "ok"
+  | "out_of_stock"
+  | "no_price"
+  | "blocked"
+  | "failed"
+  | "never_checked"
+  | "not_tracked";
+
+export interface VariantSummary {
+  id: number;
+  label: string;
+  attributes: Record<string, string>;
+}
+
+export interface Group {
+  id: number;
+  slug: string;
+  name: string;
+  brand: string | null;
+  notes: string | null;
+  variants: VariantSummary[];
+  created_at: string;
+}
+
+export interface ComparisonCell {
+  status: CellStatus;
+  price: string | null;
+  currency: string | null;
+  availability: Availability;
+  product_id: number | null;
+  url: string | null;
+  last_checked_at: string | null;
+  is_stale: boolean;
+}
+
+export interface ComparisonRow {
+  variant_id: number | null;
+  label: string;
+  attributes: Record<string, string>;
+  cells: Record<string, ComparisonCell>;
+  best_price: string | null;
+  best_stores: string[];
+  spread: string | null;
+}
+
+export interface StoreColumn {
+  slug: string;
+  name: string;
+}
+
+export interface Comparison {
+  group_slug: string;
+  group_name: string;
+  brand: string | null;
+  stores: StoreColumn[];
+  rows: ComparisonRow[];
+  generated_at: string;
+  currencies: string[];
+  /** Prices are never converted, so a single "best" across currencies is not offered. */
+  mixed_currency: boolean;
+}
+
 export interface ListingInput {
   product_name: string;
   url: string;
@@ -223,4 +293,15 @@ export const api = {
     request<EntryHistory>("GET", `/product-entries/${id}/history`),
   stats: (id: number) =>
     request<EntryStats>("GET", `/product-entries/${id}/stats`),
+
+  listGroups: () => request<Group[]>("GET", "/groups"),
+  getGroup: (slug: string) => request<Group>("GET", `/groups/${slug}`),
+  createGroup: (payload: { name: string; brand?: string }) =>
+    request<Group>("POST", "/groups", payload),
+  deleteGroup: (slug: string) => request<void>("DELETE", `/groups/${slug}`),
+  compare: (slug: string, staleHours?: number) =>
+    request<Comparison>(
+      "GET",
+      `/groups/${slug}/compare${staleHours ? `?stale_hours=${staleHours}` : ""}`,
+    ),
 };

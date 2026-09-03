@@ -92,6 +92,31 @@ const VIEWS = {
   },
 } as const satisfies Record<string, StateView>;
 
+/**
+ * Every state a listing can be in, in the order a person would want them offered.
+ *
+ * Exported so a filter can enumerate them without duplicating the labels. Ordered
+ * deliberately: the two the shop actually told us come first, then the several distinct
+ * ways of not knowing, then the two the user themselves caused.
+ */
+export const STATE_ORDER = [
+  "in_stock",
+  "out_of_stock",
+  "needs_location",
+  "unknown",
+  "blocked",
+  "failed",
+  "skipped",
+  "not_checked",
+  "paused",
+  "removed",
+] as const;
+
+export type StateKey = (typeof STATE_ORDER)[number];
+
+/** The catalogue itself, for anything that needs a label without a listing in hand. */
+export const STATE_VIEWS: Record<StateKey, StateView> = VIEWS;
+
 const BLOCKED_ERRORS = new Set(["blocked", "unavailable"]);
 
 /**

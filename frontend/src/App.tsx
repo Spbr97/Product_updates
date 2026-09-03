@@ -10,6 +10,7 @@ export function App() {
         </Link>
         <nav>
           <Link to="/products">Products</Link>
+          <Link to="/compare">Compare</Link>
           <Link className="primary" to="/products/new">
             Add product
           </Link>

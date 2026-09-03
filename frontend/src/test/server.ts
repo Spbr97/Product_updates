@@ -1,8 +1,10 @@
 import { setupServer } from "msw/node";
 import { HttpResponse, http } from "msw";
 import type {
+  Comparison,
   EntryHistory,
   EntryStats,
+  Group,
   ListingResponse,
   ProductEntry,
 } from "../api";
@@ -37,13 +39,28 @@ function listing(
 interface Store {
   entries: Map<number, ProductEntry>;
   nextId: number;
+  groups: Map<string, Group>;
+  grids: Map<string, Comparison>;
 }
 
-export const db: Store = { entries: new Map(), nextId: 1 };
+export const db: Store = {
+  entries: new Map(),
+  nextId: 1,
+  groups: new Map(),
+  grids: new Map(),
+};
 
 export function reset(): void {
   db.entries = new Map();
   db.nextId = 1;
+  db.groups = new Map();
+  db.grids = new Map();
+}
+
+/** Register a group and the grid the compare endpoint should return for it. */
+export function seedGroup(group: Group, grid?: Comparison): void {
+  db.groups.set(group.slug, group);
+  if (grid) db.grids.set(group.slug, grid);
 }
 
 function fresh(name: string): ProductEntry {
@@ -68,6 +85,50 @@ function fresh(name: string): ProductEntry {
 function err(status: number, type: string, message: string) {
   return HttpResponse.json({ error: { type, message, detail: null } }, { status });
 }
+
+/**
+ * Seed an entry whose two shops are in whatever states a test needs.
+ *
+ * The state resolver reads several fields together, so a test that set only
+ * ``availability`` would be asserting against a listing the real API could never
+ * produce. This keeps the combinations in one place and honest.
+ */
+export function seedEntry(
+  name: string,
+  shops: Partial<ListingResponse>[],
+): ProductEntry {
+  const entry = fresh(name);
+  shops.forEach((over, i) => Object.assign(entry.listings[i], over));
+  return entry;
+}
+
+/** A listing that was read cleanly and is on sale. */
+export const IN_STOCK: Partial<ListingResponse> = {
+  price: "69999.00",
+  currency: "INR",
+  availability: "in_stock",
+  last_checked_at: "2026-09-03T10:00:00Z",
+  last_check_status: "success",
+};
+
+/** A shop that priced per delivery area and would not quote one. */
+export const NEEDS_LOCATION: Partial<ListingResponse> = {
+  price: null,
+  currency: null,
+  availability: "unknown",
+  last_checked_at: "2026-09-03T10:00:00Z",
+  last_check_status: "partial",
+  last_check_error: "needs_location",
+};
+
+/** A shop that refused the request outright. */
+export const BLOCKED: Partial<ListingResponse> = {
+  price: null,
+  availability: "unknown",
+  last_checked_at: "2026-09-03T10:00:00Z",
+  last_check_status: "failed",
+  last_check_error: "blocked",
+};
 
 function storeOf(url: string): string | null {
   if (url.includes("amazon.in")) return "amazon-in";
@@ -263,6 +324,34 @@ export const handlers = [
       })),
     };
     return HttpResponse.json(body);
+  }),
+
+  http.get("/api/v1/groups", () => HttpResponse.json([...db.groups.values()])),
+
+  http.post("/api/v1/groups", async ({ request }) => {
+    const body = (await request.json()) as { name: string; brand?: string };
+    const slug = body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    if (db.groups.has(slug)) {
+      return err(409, "conflict", `a group with slug ${slug} already exists`);
+    }
+    const group: Group = {
+      id: db.groups.size + 1,
+      slug,
+      name: body.name,
+      brand: body.brand ?? null,
+      notes: null,
+      variants: [],
+      created_at: new Date().toISOString(),
+    };
+    db.groups.set(slug, group);
+    return HttpResponse.json(group, { status: 201 });
+  }),
+
+  http.get("/api/v1/groups/:slug/compare", ({ params }) => {
+    const grid = db.grids.get(String(params.slug));
+    return grid
+      ? HttpResponse.json(grid)
+      : err(404, "not_found", `no product group ${params.slug}`);
   }),
 ];
 
