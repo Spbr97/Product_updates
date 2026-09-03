@@ -177,6 +177,19 @@ class Settings(BaseSettings):
             "per-rule equivalent."
         ),
     )
+    notification_digest_minutes: int = Field(
+        default=0,
+        ge=0,
+        le=1440,
+        description=(
+            "Batch alerts into one message instead of sending each separately. Zero (the "
+            "default) sends immediately, as before. Above zero, alerts are held until the "
+            "oldest waiting one is this many minutes old, then everything waiting goes "
+            "out as a single summary -- so tracking thirty products costs one "
+            "notification a period rather than thirty. Nothing is dropped or merged in "
+            "the database: every alert is still its own row, delivered exactly once."
+        ),
+    )
     notification_timeout_seconds: int = Field(
         default=10,
         ge=1,

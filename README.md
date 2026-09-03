@@ -11,7 +11,7 @@ adding a module, not editing the tracking engine.
 
 > **Status: all 7 phases complete.** Add products by URL or find them by name, a
 > background worker checks them on their own interval, records history, and alerts
-> you — through an authenticated REST API, the CLI, or the web UI. 1,408 tests,
+> you — through an authenticated REST API, the CLI, or the web UI. 1,423 tests,
 > `ruff` and `mypy` clean, migrations reversible, and a
 > [performance review](docs/performance.md) with measured numbers.
 
@@ -260,6 +260,7 @@ most:
 | `API_MAX_REQUEST_BYTES` | `64000` | Bodies over this are rejected with 413. |
 | `API_RATE_LIMIT_PER_MINUTE` / `API_RATE_LIMIT_BURST` | `60` / `20` | State-changing requests per client. Reads and health probes are exempt. |
 | `NOTIFICATION_DEDUPE_WINDOW_SECONDS` | `86400` | How long the same alert is suppressed. Shorten for volatile prices. |
+| `NOTIFICATION_DIGEST_MINUTES` | `0` | Batch alerts into one message. `0` sends each immediately. Above zero, alerts wait until the oldest is this old, then go out as one summary — thirty products cost one notification a period, not thirty. |
 | `BLOCK_PRIVATE_ADDRESSES` | `true` | SSRF guard. Rejects URLs resolving to private/loopback ranges. |
 | `NOTIFY_DEFAULT_PROVIDERS` | `console` | Comma-separated provider slugs. |
 
@@ -528,14 +529,28 @@ one-line warning says why). CI and the Docker image build it automatically.
 
 Pages: `/ui/products` (everything you track, one row per entry, a column per shop),
 `/ui/products/new` (the Add Product form), `/ui/products/:id` (detail: per-shop panels, a
-comparison table marking the cheapest, per-shop history and statistics).
+comparison table marking the cheapest, per-shop history and statistics),
+`/ui/compare` (comparison groups) and `/ui/compare/:slug` (the price grid — every model
+down the side, every shop across the top).
+
+**Filter by how a shop answered.** The product list offers a chip per state actually
+present, with counts, and narrows to it; the state is in the URL so a view can be shared.
+This is what makes `needs a delivery area` visible — otherwise a shop that will never
+quote a price from here looks the same at a glance as one that is merely quiet.
 
 The form validates the retailer of each link, keeps every field filled in when something
 is rejected, and disables its own submit so a double click cannot become a second product.
-The detail page distinguishes **eight** listing states — not checked, in stock, out of
-stock, stock unknown, shop refused us, check failed, check skipped, paused — because a
-shop that blocked us and a product that is sold out are different facts, and rendering
-both as "Out of stock" would make the whole tool untrustworthy.
+The detail page distinguishes **nine** listing states — not checked, in stock, out of
+stock, stock unknown, needs a delivery area, shop refused us, check failed, check skipped,
+paused — because a shop that blocked us and a product that is sold out are different
+facts, and rendering both as "Out of stock" would make the whole tool untrustworthy.
+
+The comparison grid applies the same rule to its cells. Four situations produce a cell
+with no price, and a blank square in a row of prices reads as "nothing to see" — which is
+exactly wrong for a shop that refused us. So a cell reads `Refused`, `No price`,
+`Check failed` or `Not checked` as appropriate, with the long form on hover, and never
+"Out of stock" unless the shop said so. Mixed currencies suppress the cheapest badge and
+say why rather than inventing an exchange rate.
 
 Auth follows the API. With no `API_KEY` (the localhost default) it just works; where keys
 are in use the app sends `X-API-Key` from a value in `localStorage` under `pt_key`.
@@ -737,8 +752,8 @@ docker build -f docker/Dockerfile `
 
 Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
 
-- **Test coverage** — 1,408 Python tests (unit, integration against a real PostgreSQL, and
-  the API surface) plus 32 Vitest tests for the UI. CI fails the build if the
+- **Test coverage** — 1,423 Python tests (unit, integration against a real PostgreSQL, and
+  the API surface) plus 49 Vitest tests for the UI. CI fails the build if the
   database-backed tests are silently skipped.
 - **Docker** — multi-stage build (Node builds the SPA, and never enters the runtime
   image), non-root user, healthchecks, `migrate` as a separate one-shot service.

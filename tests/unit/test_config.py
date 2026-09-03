@@ -130,6 +130,21 @@ class TestDeliveryPincode:
         assert _settings(delivery_pincode="560037").redacted()["delivery_pincode"] == "560037"
 
 
+class TestNotificationDigest:
+    def test_off_by_default(self) -> None:
+        """An install that never asked for batching must not start getting it."""
+        assert _settings().notification_digest_minutes == 0
+
+    def test_a_window_is_accepted(self) -> None:
+        assert _settings(notification_digest_minutes=30).notification_digest_minutes == 30
+
+    @pytest.mark.parametrize("given", [-1, 1441])
+    def test_out_of_range_is_refused(self, given: int) -> None:
+        """Negative is meaningless; beyond a day an "alert" is no longer an alert."""
+        with pytest.raises(ValueError):
+            _settings(notification_digest_minutes=given)  # type: ignore[arg-type]
+
+
 class TestBounds:
     def test_check_interval_has_a_floor(self) -> None:
         """Below 60s we would hammer stores; the schema refuses it."""

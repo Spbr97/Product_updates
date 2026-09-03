@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -236,10 +236,26 @@ class NotificationService:
         )
 
     def deliver_pending(
-        self, *, limit: int = 50, product_id: int | None = None
+        self,
+        *,
+        limit: int = 50,
+        product_id: int | None = None,
+        now: datetime | None = None,
     ) -> DeliveryReport:
-        """Deliver rows left pending, or failed by an earlier pass and still retryable."""
+        """Deliver rows left pending, or failed by an earlier pass and still retryable.
+
+        With ``NOTIFICATION_DIGEST_MINUTES`` set, this batches instead: see
+        :meth:`_deliver_digest`. At the default of zero it is unchanged -- one message per
+        alert, which is what every existing install expects.
+        """
         rows = self.repo.list_retryable(limit=limit, product_id=product_id)
+        if not rows:
+            return DeliveryReport(created=0, sent=0, failed=0, suppressed=0)
+
+        window = self.settings.notification_digest_minutes
+        if window > 0:
+            return self._deliver_digest(rows, window_minutes=window, now=now)
+
         sent = failed = 0
         for notification in rows:
             if self.deliver(notification):
@@ -247,6 +263,105 @@ class NotificationService:
             else:
                 failed += 1
         return DeliveryReport(created=0, sent=sent, failed=failed, suppressed=0)
+
+    def _deliver_digest(
+        self,
+        rows: list[Notification],
+        *,
+        window_minutes: int,
+        now: datetime | None = None,
+    ) -> DeliveryReport:
+        """Send everything waiting as one message per destination.
+
+        Thirty tracked products having a quiet Tuesday should not be thirty separate
+        interruptions. The batch waits until the *oldest* waiting alert has aged past the
+        window, so a burst is collected rather than the first one arriving alone and the
+        rest following it -- and so an alert is never delayed by more than the window,
+        however busy the period.
+
+        What this deliberately does not do is merge anything in the database. Every alert
+        keeps its own row, its own dedupe key, and its own delivered-exactly-once
+        guarantee; the digest is purely a delivery-time grouping. So turning the setting
+        off mid-flight sends the waiting rows individually rather than losing them.
+
+        Rows are grouped by the providers that would receive them, because a rule with
+        ``notify_provider`` set has asked for one channel and must not be broadcast into
+        a summary going somewhere else.
+        """
+        moment = now or datetime.now(UTC)
+        cutoff = moment - timedelta(minutes=window_minutes)
+        oldest = min(row.created_at for row in rows)
+        if _as_utc(oldest) > cutoff:
+            # Still collecting. Nothing failed; there is simply nothing to send yet.
+            log.debug("notification.digest_waiting", waiting=len(rows))
+            return DeliveryReport(created=0, sent=0, failed=0, suppressed=0)
+
+        batches: dict[tuple[str, ...], list[Notification]] = {}
+        for row in rows:
+            key = tuple(p.slug for p in self._providers_for(row))
+            batches.setdefault(key, []).append(row)
+
+        sent = failed = suppressed = 0
+        for slugs, batch in batches.items():
+            if not slugs:
+                for row in batch:
+                    self.repo.mark_suppressed(
+                        row, reason="no configured notification provider accepted this alert"
+                    )
+                    suppressed += 1
+                continue
+            # One alert is not a digest; sending it as "1 alert" reads worse than the
+            # alert itself, and loses the product's own title in the subject line.
+            if len(batch) == 1:
+                if self.deliver(batch[0]):
+                    sent += 1
+                else:
+                    failed += 1
+                continue
+            delivered, lost = self._send_batch(batch, slugs)
+            sent += delivered
+            failed += lost
+
+        return DeliveryReport(created=0, sent=sent, failed=failed, suppressed=suppressed)
+
+    def _send_batch(
+        self, batch: list[Notification], slugs: tuple[str, ...]
+    ) -> tuple[int, int]:
+        """Send one digest, marking every row in it. Returns (sent, failed) counts."""
+        message = _digest_message(batch)
+        by_slug = {p.slug: p for p in self.providers}
+        errors: list[str] = []
+
+        for slug in slugs:
+            provider = by_slug.get(slug)
+            if provider is None:
+                continue
+            try:
+                provider.send(message)
+            except NotificationDeliveryError as exc:
+                errors.append(f"{slug}: {exc.reason}")
+                continue
+            except Exception as exc:
+                errors.append(f"{slug}: unexpected {type(exc).__name__}")
+                log.warning("notification.provider_error", provider=slug, exc_info=exc)
+                continue
+
+            when = datetime.now(UTC)
+            for row in batch:
+                self.repo.mark_sent(row, provider=slug, when=when)
+            log.info(
+                "notification.digest_sent",
+                provider=slug,
+                alerts=len(batch),
+                notification_ids=[row.id for row in batch],
+            )
+            return len(batch), 0
+
+        reason = "; ".join(errors)
+        for row in batch:
+            self.repo.mark_failed(row, error=reason)
+        log.warning("notification.digest_failed", alerts=len(batch), reason=reason)
+        return 0, len(batch)
 
     #: Kept as the name the worker's retry job uses.
     retry_pending = deliver_pending
@@ -262,6 +377,38 @@ class NotificationService:
         if preferred:
             return [p for p in self.providers if p.slug == preferred]
         return self.providers
+
+
+def _as_utc(moment: datetime) -> datetime:
+    """Postgres hands back an aware datetime; SQLite and some fixtures do not."""
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+
+
+def _digest_message(batch: list[Notification]) -> NotificationMessage:
+    """One message standing in for several alerts.
+
+    Each line keeps the alert's own title, so the summary says what happened rather than
+    only how much happened -- "5 alerts" that a reader has to open the app to understand
+    is a worse notification than five separate ones, not a better one.
+    """
+    lines = []
+    for row in batch:
+        payload = row.payload or {}
+        title = str(payload.get("title") or row.event_type)
+        body = str(payload.get("body") or "").strip()
+        url = (payload.get("context") or {}).get("url")
+        lines.append(f"- {title}" + (f"\n  {body}" if body else "") + (f"\n  {url}" if url else ""))
+
+    return NotificationMessage(
+        title=f"Product Tracker: {len(batch)} alerts",
+        body="\n".join(lines),
+        url=None,
+        context={
+            "digest": True,
+            "count": len(batch),
+            "notification_ids": [row.id for row in batch],
+        },
+    )
 
 
 def _message_from(notification: Notification) -> NotificationMessage:
