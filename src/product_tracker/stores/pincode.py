@@ -15,9 +15,19 @@ oversight. Every Indian pincode flow examined is a session handshake -- Amazon's
 address-change POST with a CSRF token, Flipkart's location API, BigBasket's
 address-bound cookie -- and reproducing one means holding a browser session, which is
 the anti-bot line this project does not cross. So :func:`apply` is a true no-op right
-now, and the value of the module is :func:`escalate`: with a PIN code configured, a shop
-that prices per area and could not be localised reports ``needs_location`` instead of
-letting a price from an unknown area pass as an answer.
+now, and all of the module's value is in :func:`escalate`.
+
+:func:`escalate` covers two failures, and the second is the one that made this module
+necessary:
+
+* A shop that prices per area returned no price, and a PIN code was configured. Report
+  ``NEEDS_LOCATION`` rather than let "no price found" read as a broken selector.
+* **A shop that stocks nothing until a delivery area is chosen said "out of stock".**
+  Blinkit does this: a cold fetch of a widely-available carton of milk returns valid
+  JSON-LD claiming ``OutOfStock``, because nothing is deliverable to an address we never
+  gave. Recorded as stock, that is a confident false fact about the product -- the exact
+  failure this project exists to refuse, and worse than a missing price because the page
+  looks like it answered. Availability is forced back to ``UNKNOWN``.
 
 The ``cookies`` and ``query_param`` fields exist so that a host which *can* be localised
 statically becomes one line here, with no change to the fetch path or any adapter.
@@ -31,7 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from ..domain.enums import FetchOutcome
+from ..domain.enums import Availability, FetchOutcome
 from ..domain.models import FetchContext, FetchResult
 from ..utils.urls import host_of
 
@@ -54,6 +64,10 @@ class PincodeRule:
     needs_js: bool = False
     #: Prices are national; a delivery area changes nothing worth reporting.
     location_independent: bool = False
+    #: The shop stocks *nothing* until a delivery area is chosen, so with none set its
+    #: page says "out of stock" about every product on it. That is a statement about our
+    #: missing address, not about the product, and it must never be recorded as stock.
+    stock_gated_by_area: bool = False
     #: Why this host is classified the way it is.
     note: str = ""
 
@@ -72,13 +86,17 @@ RULES: dict[str, PincodeRule] = {
     ),
     "bigbasket.com": PincodeRule(
         needs_js=True,
+        stock_gated_by_area=True,
         note="Groceries are the most area-dependent catalogue of all; the address cookie "
-        "is issued by the site against a session, not composed from a PIN code.",
+        "is issued by the site against a session, not composed from a PIN code. Nothing "
+        "is deliverable until an area is chosen.",
     ),
     "blinkit.com": PincodeRule(
         needs_js=True,
-        note="Quick commerce: nothing at all is priced until a delivery area is chosen in "
-        "an app session. Checks are expected to fail here regardless.",
+        stock_gated_by_area=True,
+        note="Quick commerce: nothing at all is stocked or priced until a delivery area "
+        "is chosen in an app session. Observed 2026-09-03 -- a cold fetch returns valid "
+        "JSON-LD claiming OutOfStock for a product that is in fact widely available.",
     ),
     "croma.com": PincodeRule(
         needs_js=True,
@@ -135,27 +153,53 @@ def apply(url: str, ctx: FetchContext) -> tuple[str, dict[str, str]]:
     return url, cookies
 
 
+#: Availabilities a stock-gated shop reports about *everything* when no delivery area is
+#: set. Read off such a page they are facts about our missing address, not the product.
+_UNTRUSTWORTHY_WITHOUT_AREA = (Availability.OUT_OF_STOCK, Availability.UNAVAILABLE)
+
+
 def escalate(url: str, ctx: FetchContext, result: FetchResult) -> FetchResult:
-    """Relabel "no price found" as "no price *for this area*", where that is the truth.
+    """Report what a delivery area we could not set cost us, in the two ways it can.
 
-    Only ever narrows a ``PRICE_NOT_FOUND``. A successful read is never touched, and
-    availability is carried through untouched -- a page we could not price is not a page
-    that told us the product is gone.
+    A successful price read is never touched, and a block stays a block. This only ever
+    turns a weaker answer into a more honest one.
 
-    The conditions are deliberately all of: a PIN code is configured (otherwise the user
-    never asked for a location and the miss is just a miss), the host is classified, it
-    prices per area, and :func:`apply` had nothing to send. If a static mechanism ever
-    lands for a host, its misses stop being about location and this stops firing for it.
+    **Case one: no price.** The shop prices per area, a PIN code was configured, and
+    :func:`apply` had nothing to send -- so say the price is missing *for this area*
+    rather than leaving "no price found" to read as a broken selector. Requires a
+    configured PIN code: with none, nobody asked for a location and the miss is just a
+    miss.
+
+    **Case two: an out-of-stock claim from a shop that stocks nothing without an area.**
+    This one does *not* require a configured PIN code, because it is the more dangerous
+    error and it happens by default. Blinkit's page returns valid structured data saying
+    ``OutOfStock`` for every product on it until a delivery address exists; recorded as
+    stock, that is a false fact about the product, and it is exactly the failure this
+    project refuses to make -- worse than the extraction case, because the page looks
+    like it answered. Availability is forced back to ``UNKNOWN``: we do not know.
     """
-    if result.outcome is not FetchOutcome.PRICE_NOT_FOUND:
+    rule = rule_for(url)
+    if rule is None or rule.location_independent:
         return result
-    if not ctx.delivery_pincode:
+    # A host we actually localised is answering about the right place; its claims stand.
+    if rule.cookies or rule.query_param:
         return result
 
-    rule = rule_for(url)
-    if rule is None or rule.location_independent or not rule.needs_js:
+    if rule.stock_gated_by_area and result.availability in _UNTRUSTWORTHY_WITHOUT_AREA:
+        return replace(
+            result,
+            outcome=FetchOutcome.NEEDS_LOCATION,
+            availability=Availability.UNKNOWN,
+            message=(
+                "the page says this is not available, but this shop stocks nothing at all "
+                "until a delivery area is set, and none could be -- so this is recorded as "
+                "unknown rather than as a product that is out of stock"
+            ),
+        )
+
+    if result.outcome is not FetchOutcome.PRICE_NOT_FOUND or not ctx.delivery_pincode:
         return result
-    if rule.cookies or rule.query_param:
+    if not rule.needs_js:
         return result
 
     return replace(

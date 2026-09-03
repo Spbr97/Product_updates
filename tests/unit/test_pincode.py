@@ -1,11 +1,14 @@
 """Delivery-area handling: what gets applied, and what gets relabelled.
 
-Two properties carry the whole module, and both are about *not* overclaiming:
+Everything here is about *not* overclaiming, in three directions:
 
-* With no PIN code configured, nothing anywhere changes. This feature must be invisible
-  until someone asks for it.
-* A relabelled result is still a "we could not read a price" result. It never becomes
-  out-of-stock, and it never becomes a success.
+* Relabelling only ever weakens a claim. A success stays a success, a block stays a
+  block, and nothing ever becomes out-of-stock that was not already.
+* For an ordinary shop with no PIN code configured, nothing changes at all. That half of
+  the feature is invisible until someone asks for it.
+* For a shop that stocks nothing until a delivery area is chosen, its "out of stock" is
+  discarded whether or not a PIN code is configured -- because it is a statement about
+  our missing address, and recording it as stock is a false fact about the product.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ WITHOUT_PIN = FetchContext()
 
 AMAZON = "https://www.amazon.in/dp/B0TEST1234"
 SAMSUNG = "https://www.samsung.com/in/smartphones/galaxy-s25/"
+BLINKIT = "https://blinkit.com/prn/amul-taaza-toned-milk/prid/14639"
 UNKNOWN = "https://shop.example.com/p/1"
 
 
@@ -62,6 +66,24 @@ class TestRuleLookup:
         """``needs_js`` and ``location_independent`` are contradictory claims."""
         for domain, rule in pincode.RULES.items():
             assert not (rule.needs_js and rule.location_independent), domain
+
+    def test_a_national_pricing_shop_is_never_stock_gated(self) -> None:
+        for domain, rule in pincode.RULES.items():
+            assert not (rule.location_independent and rule.stock_gated_by_area), domain
+
+    def test_every_stock_gated_host_is_read_by_the_generic_adapter(self) -> None:
+        """The out-of-stock escalation is wired into ``generic.py`` only.
+
+        Marking a host stock-gated that some other adapter reads would leave its false
+        out-of-stock claims recorded as fact -- silently, because the classification
+        would look correct here. Fail loudly instead of assuming.
+        """
+        from product_tracker.stores.registry import StoreRegistry
+
+        registry = StoreRegistry()
+        for domain, rule in pincode.RULES.items():
+            if rule.stock_gated_by_area:
+                assert registry.resolve(f"https://www.{domain}/p/1").slug == "generic", domain
 
     def test_every_rule_says_why(self) -> None:
         for domain, rule in pincode.RULES.items():
@@ -187,6 +209,89 @@ class TestEscalate:
         result = no_price()
 
         assert pincode.escalate(AMAZON, WITH_PIN, result) is result
+
+
+class TestStockGatedShops:
+    """The failure that made this module necessary, and the reason it is not opt-in.
+
+    Blinkit returns valid JSON-LD claiming ``OutOfStock`` for every product on it until a
+    delivery address exists. Recorded as stock that is a confident false fact -- and it
+    happened by default, to anyone who tracked a Blinkit URL, with no PIN code involved.
+    """
+
+    def test_an_out_of_stock_claim_becomes_unknown(self) -> None:
+        sold_out = FetchResult(
+            outcome=FetchOutcome.OUT_OF_STOCK,
+            availability=Availability.OUT_OF_STOCK,
+            name="Amul Taaza Toned Milk",
+            fetch_method=FetchMethod.HTTP,
+            http_status=200,
+        )
+
+        escalated = pincode.escalate(BLINKIT, WITHOUT_PIN, sold_out)
+
+        assert escalated.outcome is FetchOutcome.NEEDS_LOCATION
+        assert escalated.availability is Availability.UNKNOWN
+        assert escalated.availability is not Availability.OUT_OF_STOCK
+
+    def test_it_fires_without_a_pincode_configured(self) -> None:
+        """Deliberately not gated on the setting. The claim is untrustworthy because no
+        area was applied, and with the setting unset none ever is."""
+        sold_out = FetchResult(
+            outcome=FetchOutcome.OUT_OF_STOCK,
+            availability=Availability.OUT_OF_STOCK,
+            fetch_method=FetchMethod.HTTP,
+        )
+
+        assert pincode.escalate(BLINKIT, WITHOUT_PIN, sold_out).availability is (
+            Availability.UNKNOWN
+        )
+        assert pincode.escalate(BLINKIT, WITH_PIN, sold_out).availability is (
+            Availability.UNKNOWN
+        )
+
+    def test_a_page_declared_unavailable_is_treated_the_same(self) -> None:
+        unavailable = FetchResult(
+            outcome=FetchOutcome.UNAVAILABLE,
+            availability=Availability.UNAVAILABLE,
+            fetch_method=FetchMethod.HTTP,
+        )
+
+        escalated = pincode.escalate(BLINKIT, WITHOUT_PIN, unavailable)
+
+        assert escalated.availability is Availability.UNKNOWN
+
+    def test_a_real_price_from_a_stock_gated_shop_still_stands(self) -> None:
+        """If it quoted us a price, it decided we were somewhere it delivers."""
+        priced = FetchResult(
+            outcome=FetchOutcome.OK,
+            availability=Availability.IN_STOCK,
+            price=Decimal("29.00"),
+            currency="INR",
+            fetch_method=FetchMethod.HTTP,
+        )
+
+        assert pincode.escalate(BLINKIT, WITHOUT_PIN, priced) is priced
+
+    def test_an_ordinary_shop_keeps_its_out_of_stock_claim(self) -> None:
+        """Amazon saying "currently unavailable" is about the product. Relabelling that
+        would throw away a real finding to avoid a problem Amazon does not have."""
+        sold_out = FetchResult(
+            outcome=FetchOutcome.OUT_OF_STOCK,
+            availability=Availability.OUT_OF_STOCK,
+            fetch_method=FetchMethod.HTTP,
+        )
+
+        assert pincode.escalate(AMAZON, WITH_PIN, sold_out) is sold_out
+
+    def test_an_unclassified_shop_keeps_its_out_of_stock_claim(self) -> None:
+        sold_out = FetchResult(
+            outcome=FetchOutcome.OUT_OF_STOCK,
+            availability=Availability.OUT_OF_STOCK,
+            fetch_method=FetchMethod.HTTP,
+        )
+
+        assert pincode.escalate(UNKNOWN, WITH_PIN, sold_out) is sold_out
 
 
 class TestOutcomeClassification:

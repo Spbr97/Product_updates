@@ -561,6 +561,64 @@ class TestDeliveryPincodeOnTheWire:
         assert "cookie" not in route.calls[0].request.headers
 
 
+class TestStockGatedShopsThroughTheAdapter:
+    """Blinkit, end to end through the generic adapter, from a real page's shape.
+
+    Found by running a live check, not by reading code: ``product-tracker check`` on a
+    carton of Amul milk reported ``out_of_stock`` with status ``success``. The milk was
+    not out of stock. Blinkit's page publishes perfectly valid JSON-LD saying so because
+    nothing is deliverable to an address it was never given.
+    """
+
+    BLINKIT = "https://blinkit.com/prn/amul-taaza-toned-milk/prid/14639"
+
+    def test_a_false_out_of_stock_is_recorded_as_unknown(
+        self, generic: GenericStoreAdapter
+    ) -> None:
+        stub(self.BLINKIT, html=load("jsonld_out_of_stock.html"))
+
+        result = generic.fetch_product(self.BLINKIT, CTX)
+
+        assert result.outcome is FetchOutcome.NEEDS_LOCATION
+        assert result.availability is Availability.UNKNOWN
+        assert result.availability is not Availability.OUT_OF_STOCK
+
+    def test_it_needs_no_pincode_to_be_configured(
+        self, generic: GenericStoreAdapter
+    ) -> None:
+        """The bug bites by default, so the correction cannot be opt-in."""
+        stub(self.BLINKIT, html=load("jsonld_out_of_stock.html"))
+
+        result = generic.fetch_product(
+            self.BLINKIT, replace(CTX, delivery_pincode=None)
+        )
+
+        assert result.availability is Availability.UNKNOWN
+
+    def test_a_real_price_from_the_same_shop_is_kept(
+        self, generic: GenericStoreAdapter
+    ) -> None:
+        """If it quoted a price, it decided we were somewhere it delivers to."""
+        stub(self.BLINKIT, html=load("jsonld_in_stock.html"))
+
+        result = generic.fetch_product(self.BLINKIT, CTX)
+
+        assert result.outcome is FetchOutcome.OK
+        assert result.price == Decimal("69999.00")
+        assert result.availability is Availability.IN_STOCK
+
+    def test_an_ordinary_shop_keeps_its_out_of_stock_reading(
+        self, generic: GenericStoreAdapter
+    ) -> None:
+        """The correction must stay confined to shops that actually behave this way."""
+        stub("https://shop.example.com/p/oos", html=load("jsonld_out_of_stock.html"))
+
+        result = generic.fetch_product("https://shop.example.com/p/oos", CTX)
+
+        assert result.outcome is FetchOutcome.OUT_OF_STOCK
+        assert result.availability is Availability.OUT_OF_STOCK
+
+
 class TestRegistryLookup:
     def test_get_by_slug(self) -> None:
         assert StoreRegistry().get("flipkart").slug == "flipkart"

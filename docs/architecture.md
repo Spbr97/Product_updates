@@ -88,6 +88,18 @@ alternative — recording the default area's price as the answer — is the same
 error as calling a failed extraction "out of stock", and it is harder to notice because
 the number looks right.
 
+The sharper case is `stock_gated_by_area`, and it was found by running a live check
+rather than by reading code. `product-tracker check` on a Blinkit carton of milk reported
+`out_of_stock` with status `success`. The milk was not out of stock: Blinkit publishes
+perfectly valid JSON-LD saying `OutOfStock` for everything on the site until a delivery
+address exists, so the page was describing our missing address and we recorded it as a
+fact about the product. That is precisely the failure the availability/extraction split
+exists to prevent, arriving through a door the split did not cover — the page *answered*,
+it just answered a different question. So an out-of-stock claim from a shop that stocks
+nothing without an area is forced back to `UNKNOWN`, and unlike the price case this does
+not wait for anyone to configure a PIN code: the bug bites by default, so the correction
+cannot be opt-in.
+
 `NEEDS_LOCATION` maps to `CheckStatus.PARTIAL`, not `FAILED`: the request was fine and
 the page was readable. In the comparison grid it lands as `NO_PRICE`.
 

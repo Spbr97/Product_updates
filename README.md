@@ -283,9 +283,16 @@ is the anti-bot line this project does not cross.
 So setting a PIN code does not localise prices. What it does is stop the tracker
 *pretending*: a shop classified as pricing-per-area that returns a page with no price
 records the outcome `needs_location` and the check status `partial`, instead of leaving
-"no price found" to be read as a broken selector — or, far worse, as stock information.
-Availability stays `unknown`, never `out_of_stock`, and the comparison grid renders such
-a cell as "no price". Leave `DELIVERY_PINCODE` unset and nothing anywhere changes.
+"no price found" to be read as a broken selector. Availability stays `unknown`, never
+`out_of_stock`, and the comparison grid renders such a cell as "no price". Leave
+`DELIVERY_PINCODE` unset and this half of the behaviour never fires.
+
+**One correction applies whether or not you set a PIN code.** Quick-commerce shops
+(Blinkit, BigBasket) stock *nothing* until a delivery address exists, and their pages say
+`OutOfStock` about every product until one does. A live check on a Blinkit carton of milk
+reported `out_of_stock`; the milk was not out of stock. Such a claim is a statement about
+our missing address, not about the product, so it is recorded as `unknown`. That one is
+not opt-in, because the error happens by default.
 
 The per-shop classifications, and the reasoning for each, are in
 [`src/product_tracker/stores/pincode.py`](src/product_tracker/stores/pincode.py). A shop

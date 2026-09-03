@@ -107,16 +107,23 @@ class GenericStoreAdapter(StoreAdapter):
                     if data.availability is Availability.OUT_OF_STOCK
                     else FetchOutcome.UNAVAILABLE
                 )
-                return FetchResult(
-                    outcome=outcome,
-                    availability=data.availability,
-                    name=data.name,
-                    product_identifier=data.identifier,
-                    image_url=data.image_url,
-                    raw_metadata=data.raw,
-                    fetch_method=method,
-                    http_status=response.http_status,
-                    message="listing has no price because it is not purchasable",
+                # ...unless the shop stocks nothing at all until a delivery area is set,
+                # in which case its "not purchasable" is about our missing address rather
+                # than about this product. ``escalate`` is a no-op for every other host.
+                return pincode.escalate(
+                    response.url,
+                    ctx,
+                    FetchResult(
+                        outcome=outcome,
+                        availability=data.availability,
+                        name=data.name,
+                        product_identifier=data.identifier,
+                        image_url=data.image_url,
+                        raw_metadata=data.raw,
+                        fetch_method=method,
+                        http_status=response.http_status,
+                        message="listing has no price because it is not purchasable",
+                    ),
                 )
             # Price genuinely missing. Availability stays whatever the page said, which
             # for most such pages is UNKNOWN -- and must not become OUT_OF_STOCK.
