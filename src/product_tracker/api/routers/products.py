@@ -19,7 +19,12 @@ from ...services.user_service import assert_subscribed
 from ...stores.registry import default_registry
 from ..deps import Config, CurrentReader, CurrentUser, DbSession, PageParams, RequireWrite
 from ..schemas.common import ErrorResponse, Page
-from ..schemas.products import CheckResponse, ProductCreate, ProductResponse
+from ..schemas.products import (
+    CheckResponse,
+    ProductCreate,
+    ProductResponse,
+    ProductUpdate,
+)
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -78,6 +83,34 @@ def get_product(
 ) -> ProductResponse:
     service = ProductService(session, default_registry(), settings, user.id)
     return ProductResponse.model_validate(service.get(product_id))
+
+
+@router.patch(
+    "/{product_id}",
+    response_model=ProductResponse,
+    summary="Change a product's check interval",
+    dependencies=[RequireWrite],
+    responses={
+        404: {"model": ErrorResponse, "description": "No such product."},
+        422: {"model": ErrorResponse, "description": "Interval below the politeness floor."},
+    },
+)
+def update_product(
+    product_id: int,
+    payload: ProductUpdate,
+    session: DbSession,
+    settings: Config,
+    user: CurrentUser,
+) -> ProductResponse:
+    """Currently only the check interval, so the CLI's ``set-interval`` has an API twin.
+
+    ``null`` returns the product to the global default. Scoped to the caller's own
+    listings; another user's id is 404, matching every other route here.
+    """
+    service = ProductService(session, default_registry(), settings, user.id)
+    product = service.set_check_interval(product_id, payload.check_interval_seconds)
+    session.flush()
+    return ProductResponse.model_validate(product)
 
 
 @router.delete(

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Query, status
 from ...domain.enums import TrackingStatus
 from ...services.alert_service import AlertService
 from ..deps import CurrentReader, CurrentUser, DbSession, PageParams, RequireWrite
-from ..schemas.alerts import AlertCreate, AlertResponse
+from ..schemas.alerts import AlertCreate, AlertResponse, AlertUpdate
 from ..schemas.common import ErrorResponse, Page
 from ..schemas.products import ProductResponse
 
@@ -72,6 +72,35 @@ def list_alerts(
 )
 def get_alert(rule_id: int, session: DbSession, user: CurrentReader) -> AlertResponse:
     return AlertResponse.model_validate(AlertService(session, user.id).get(rule_id))
+
+
+@router.patch(
+    "/alerts/{rule_id}",
+    response_model=AlertResponse,
+    summary="Change a rule's cooldown, or turn it on and off",
+    dependencies=[RequireWrite],
+    responses={
+        **_NOT_FOUND,
+        422: {"model": ErrorResponse, "description": "Invalid cooldown."},
+    },
+)
+def update_alert(
+    rule_id: int, payload: AlertUpdate, session: DbSession, user: CurrentUser
+) -> AlertResponse:
+    """Apply whichever of ``cooldown_seconds`` and ``enabled`` the body actually carries.
+
+    An empty body is a no-op that returns the rule unchanged; an unknown ``rule_id`` is
+    404 whether or not any field was sent.
+    """
+    service = AlertService(session, user.id)
+    fields = payload.model_fields_set
+    rule = service.get(rule_id)
+    if "cooldown_seconds" in fields:
+        rule = service.set_cooldown(rule_id, payload.cooldown_seconds)
+    if "enabled" in fields and payload.enabled is not None:
+        rule = service.set_enabled(rule_id, payload.enabled)
+    session.flush()
+    return AlertResponse.model_validate(rule)
 
 
 @router.delete(

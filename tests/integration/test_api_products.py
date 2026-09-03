@@ -143,6 +143,74 @@ class TestDelete:
         assert client.delete("/api/v1/products/999999").status_code == 404
 
 
+class TestUpdate:
+    def test_sets_the_check_interval(self, client: TestClient) -> None:
+        created = client.post("/api/v1/products", json={"url": PRODUCT_URL}).json()
+
+        response = client.patch(
+            f"/api/v1/products/{created['id']}", json={"check_interval_seconds": 3600}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["check_interval_seconds"] == 3600
+        again = client.get(f"/api/v1/products/{created['id']}").json()
+        assert again["check_interval_seconds"] == 3600
+
+    def test_null_restores_the_global_default(self, client: TestClient) -> None:
+        created = client.post(
+            "/api/v1/products", json={"url": PRODUCT_URL, "check_interval_seconds": 3600}
+        ).json()
+
+        response = client.patch(
+            f"/api/v1/products/{created['id']}", json={"check_interval_seconds": None}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["check_interval_seconds"] is None
+
+    def test_below_the_floor_is_rejected(self, client: TestClient) -> None:
+        created = client.post("/api/v1/products", json={"url": PRODUCT_URL}).json()
+
+        response = client.patch(
+            f"/api/v1/products/{created['id']}", json={"check_interval_seconds": 30}
+        )
+
+        assert response.status_code == 422
+        assert response.json()["error"]["type"] == "validation_error"
+
+    def test_missing_body_is_rejected(self, client: TestClient) -> None:
+        created = client.post("/api/v1/products", json={"url": PRODUCT_URL}).json()
+
+        assert client.patch(f"/api/v1/products/{created['id']}", json={}).status_code == 422
+
+    def test_update_missing_product_returns_404(self, client: TestClient) -> None:
+        response = client.patch(
+            "/api/v1/products/999999", json={"check_interval_seconds": 3600}
+        )
+        assert response.status_code == 404
+
+    def test_another_account_gets_404(self, client: TestClient) -> None:
+        from product_tracker.db.session import session_scope
+        from product_tracker.services import user_service
+
+        with session_scope() as session:
+            alice_key = user_service.create_user(session, email="alice@example.com").api_key
+            bob_key = user_service.create_user(session, email="bob@example.com").api_key
+
+        created = client.post(
+            "/api/v1/products", json={"url": PRODUCT_URL}, headers={"X-API-Key": alice_key}
+        ).json()
+
+        response = client.patch(
+            f"/api/v1/products/{created['id']}",
+            json={"check_interval_seconds": 3600},
+            headers={"X-API-Key": bob_key},
+        )
+
+        # Not found, not forbidden: a 403 would confirm the id exists.
+        assert response.status_code == 404
+
+
 class TestCheck:
     def test_check_returns_the_execution(self, client: TestClient) -> None:
         stub_ok(PRODUCT_URL)
@@ -207,5 +275,6 @@ class TestOpenApi:
 
         assert "/api/v1/products" in paths
         assert "/api/v1/products/{product_id}" in paths
+        assert "patch" in paths["/api/v1/products/{product_id}"]
         assert "/api/v1/products/{product_id}/check" in paths
         assert "/api/v1/stores" in paths

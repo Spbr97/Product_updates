@@ -31,6 +31,20 @@ class ProductCreate(BaseModel):
     )
 
 
+class ProductUpdate(BaseModel):
+    """Fields on a tracked product that can be changed in place.
+
+    Only the check interval for now. It is a required field, not optional: ``PATCH`` with
+    an empty body would otherwise silently reset the interval. Pass ``null`` deliberately
+    to return the product to the global default; the sub-minute floor is enforced by the
+    service, not here, so its message stays in one place.
+    """
+
+    check_interval_seconds: int | None = Field(
+        description="Seconds between scheduled checks; null restores the global default.",
+    )
+
+
 class StoreSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

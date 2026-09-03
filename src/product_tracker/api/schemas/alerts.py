@@ -45,6 +45,23 @@ class AlertCreate(BaseModel):
         return merged
 
 
+class AlertUpdate(BaseModel):
+    """Change an existing rule without recreating it.
+
+    Both fields are optional and only the ones actually present in the request body are
+    applied -- ``model_fields_set`` distinguishes "omitted" from "sent as null". So
+    ``{"enabled": false}`` leaves the cooldown alone, and ``{"cooldown_seconds": null}``
+    removes the gap without touching the enabled flag.
+    """
+
+    cooldown_seconds: int | None = Field(
+        default=None, ge=0, description="Minimum seconds between firings. null removes the gap."
+    )
+    enabled: bool | None = Field(
+        default=None, description="Turn the rule on or off. It keeps its history either way."
+    )
+
+
 class AlertResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

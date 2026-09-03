@@ -170,6 +170,67 @@ class TestListGetDelete:
         assert client.delete("/api/v1/alerts/999999").status_code == 404
 
 
+class TestUpdate:
+    @pytest.fixture
+    def rule_id(self, client: TestClient, product_id: int) -> int:
+        created = client.post(
+            "/api/v1/alerts", json={"product_id": product_id, "rule_type": "price_dropped"}
+        ).json()
+        return int(created["id"])
+
+    def test_sets_the_cooldown(self, client: TestClient, rule_id: int) -> None:
+        response = client.patch(
+            f"/api/v1/alerts/{rule_id}", json={"cooldown_seconds": 900}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["cooldown_seconds"] == 900
+
+    def test_null_cooldown_removes_the_gap(self, client: TestClient, rule_id: int) -> None:
+        client.patch(f"/api/v1/alerts/{rule_id}", json={"cooldown_seconds": 900})
+
+        response = client.patch(
+            f"/api/v1/alerts/{rule_id}", json={"cooldown_seconds": None}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["cooldown_seconds"] is None
+
+    def test_toggles_enabled(self, client: TestClient, rule_id: int) -> None:
+        off = client.patch(f"/api/v1/alerts/{rule_id}", json={"enabled": False})
+        assert off.status_code == 200
+        assert off.json()["enabled"] is False
+
+        on = client.patch(f"/api/v1/alerts/{rule_id}", json={"enabled": True})
+        assert on.json()["enabled"] is True
+
+    def test_only_the_fields_present_are_applied(
+        self, client: TestClient, rule_id: int
+    ) -> None:
+        client.patch(f"/api/v1/alerts/{rule_id}", json={"cooldown_seconds": 900})
+
+        client.patch(f"/api/v1/alerts/{rule_id}", json={"enabled": False})
+
+        body = client.get(f"/api/v1/alerts/{rule_id}").json()
+        assert body["enabled"] is False
+        assert body["cooldown_seconds"] == 900
+
+    def test_empty_body_is_a_no_op(self, client: TestClient, rule_id: int) -> None:
+        response = client.patch(f"/api/v1/alerts/{rule_id}", json={})
+        assert response.status_code == 200
+        assert response.json()["id"] == rule_id
+
+    def test_negative_cooldown_is_rejected(self, client: TestClient, rule_id: int) -> None:
+        response = client.patch(
+            f"/api/v1/alerts/{rule_id}", json={"cooldown_seconds": -1}
+        )
+        assert response.status_code == 422
+
+    def test_update_missing_rule_returns_404(self, client: TestClient) -> None:
+        response = client.patch("/api/v1/alerts/999999", json={"enabled": False})
+        assert response.status_code == 404
+
+
 class TestPauseResume:
     def test_pause_then_resume(self, client: TestClient, product_id: int) -> None:
         paused = client.post(f"/api/v1/products/{product_id}/pause")
@@ -209,5 +270,6 @@ class TestOpenApi:
 
         assert "/api/v1/alerts" in paths
         assert "/api/v1/alerts/{rule_id}" in paths
+        assert "patch" in paths["/api/v1/alerts/{rule_id}"]
         assert "/api/v1/products/{product_id}/pause" in paths
         assert "/api/v1/products/{product_id}/resume" in paths

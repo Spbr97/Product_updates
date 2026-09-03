@@ -140,6 +140,31 @@ def alerts_set_cooldown(
         success(f"alert {rule_id} will fire at most once every {gap}s")
 
 
+@alerts_app.command("set-enabled")
+def alerts_set_enabled(
+    rule_id: Annotated[int, typer.Argument(help="Alert rule ID.")],
+    on: Annotated[
+        bool, typer.Option("--on/--off", help="Turn the alert on, or off.")
+    ] = True,
+    user: UserOption = None,
+) -> None:
+    """Turn an alert on or off without deleting it.
+
+    A disabled rule stays attached to its product and keeps its cooldown and history; it
+    simply stops firing until it is turned back on.
+    """
+    try:
+        with session_scope() as session:
+            service = AlertService(session, acting_user(session, user).id)
+            rule = service.set_enabled(rule_id, on)
+            state = rule.enabled
+    except NotFoundError as exc:
+        error(str(exc))
+        raise typer.Exit(ExitCode.NOT_FOUND) from exc
+
+    success(f"alert {rule_id} is now {'enabled' if state else 'disabled'}")
+
+
 @alerts_app.command("remove")
 def alerts_remove(
     rule_id: Annotated[int, typer.Argument(help="Alert ID.")],

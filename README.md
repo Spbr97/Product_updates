@@ -298,7 +298,9 @@ uvicorn product_tracker.api.app:get_app --factory --reload
 - `GET /docs` — OpenAPI UI. `GET /openapi.json` — schema.
 - `/api/v1/products` — `POST` to track, `GET` to list (paginated, filterable by
   `store` and `tracking_status`).
-- `/api/v1/products/{id}` — `GET` one, `DELETE` to stop tracking.
+- `/api/v1/products/{id}` — `GET` one, `PATCH` to change its check interval
+  (`{"check_interval_seconds": 3600}`, or `null` for the global default; the sub-minute
+  politeness floor still applies), `DELETE` to stop tracking.
 - `/api/v1/products/{id}/check` — `POST` to check now. Returns **200 with a failed
   execution** when a store cannot be read: that is a recorded fact, not a broken API.
 - `/api/v1/products/{id}/history` — recorded prices, newest first, paginated.
@@ -306,7 +308,9 @@ uvicorn product_tracker.api.app:get_app --factory --reload
 - `/api/v1/products/{id}/stats` — current/lowest/highest/average, when the low occurred,
   and change since the first observation. `null` when nothing has been recorded yet.
 - `/api/v1/alerts` — `POST` to create a rule, `GET` to list (filter by `product_id`).
-- `/api/v1/alerts/{id}` — `GET` one, `DELETE` to remove.
+- `/api/v1/alerts/{id}` — `GET` one, `PATCH` to change the cooldown or toggle it
+  (`{"cooldown_seconds": 900}`, `{"enabled": false}`; only the fields sent are applied),
+  `DELETE` to remove.
 - `/api/v1/products/{id}/pause` and `/resume` — stop or restart scheduled checks.
 - `/api/v1/stores` — supported stores, from the adapter registry.
 - `/api/v1/groups` — `POST` to create a comparison group (name, optional brand/slug),
@@ -445,6 +449,7 @@ product-tracker compare <GROUP-SLUG> [--layout grid|list|auto]
 product-tracker alerts add <ID> --type price_dropped
 product-tracker alerts add <ID> --type price_below_target --target 69999 [--cooldown 3600]
 product-tracker alerts set-cooldown <RULE_ID> 3600
+product-tracker alerts set-enabled <RULE_ID> --off   # or --on; keeps the rule and its history
 product-tracker alerts list [--product <ID>]
 product-tracker alerts remove <RULE_ID> [--yes]
 product-tracker alerts history <ID>

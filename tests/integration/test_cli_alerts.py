@@ -130,6 +130,35 @@ class TestAlertsRemove:
         )
 
 
+class TestAlertsSetEnabled:
+    def test_off_then_on(self, clean_db: None) -> None:
+        add_product()
+        runner.invoke(app, ["alerts", "add", "1", "--type", "price_dropped"])
+
+        off = runner.invoke(app, ["alerts", "set-enabled", "1", "--off"])
+        assert off.exit_code == ExitCode.OK
+        assert "is now disabled" in off.stdout
+
+        on = runner.invoke(app, ["alerts", "set-enabled", "1", "--on"])
+        assert on.exit_code == ExitCode.OK
+        assert "is now enabled" in on.stdout
+
+    def test_defaults_to_on(self, clean_db: None) -> None:
+        add_product()
+        runner.invoke(app, ["alerts", "add", "1", "--type", "price_dropped"])
+        runner.invoke(app, ["alerts", "set-enabled", "1", "--off"])
+
+        result = runner.invoke(app, ["alerts", "set-enabled", "1"])
+
+        assert result.exit_code == ExitCode.OK
+        assert "is now enabled" in result.stdout
+
+    def test_missing_rule_exits_not_found(self, clean_db: None) -> None:
+        assert runner.invoke(
+            app, ["alerts", "set-enabled", "999999", "--off"]
+        ).exit_code == ExitCode.NOT_FOUND
+
+
 class TestPauseResume:
     def test_pause_then_resume(self, clean_db: None) -> None:
         add_product()
