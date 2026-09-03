@@ -169,8 +169,9 @@ class Settings(BaseSettings):
         ge=1,
         le=120,
         description=(
-            "Per-provider delivery timeout. Bounded because delivery currently runs "
-            "inside the check's transaction; a hanging provider would hold it open."
+            "Per-provider delivery timeout. Delivery runs in its own transaction, after "
+            "the check's -- this bounds each provider call so one slow SMTP server or "
+            "webhook cannot stall the whole delivery pass."
         ),
     )
 

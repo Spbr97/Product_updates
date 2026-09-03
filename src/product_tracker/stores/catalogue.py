@@ -47,6 +47,16 @@ KNOWN_STORES: tuple[StoreInfo, ...] = (
         domains=("bigbasket.com",),
         adapter_key="generic",
     ),
+    # Named in the original brief, listed so its checks are attributed to Blinkit rather
+    # than lost in "generic". Blinkit is a ~10-minute quick-commerce app: no crawlable web
+    # catalogue, and every price is gated behind a delivery pincode set in an app session.
+    # Checks are expected to fail; the circuit breaker backs it off, like Croma.
+    StoreInfo(
+        slug="blinkit",
+        display_name="Blinkit",
+        domains=("blinkit.com",),
+        adapter_key="generic",
+    ),
     # Listed so its checks are attributed to Croma rather than lost in "generic".
     # Croma blocks automated access at the edge -- a real headless browser gets the same
     # 403 -- so checks are expected to fail and the circuit breaker backs it off.

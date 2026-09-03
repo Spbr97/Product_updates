@@ -97,6 +97,7 @@ Where each shop stands, verified 2026-09-02:
 | Vijay Sales | ✅ catalogue, prices filled in | ✅ |
 | Samsung | ✅ catalogue, prices filled in — current models only | ✅ |
 | BigBasket | ❌ search disallowed, publishes no catalogue | ✅ |
+| Blinkit | ❌ quick-commerce app, no readable web surface | ❌ |
 | Croma | ❌ blocks us (HTTP 403) | ❌ |
 | Sangeetha | ❌ stopped answering | ⚠️ intermittent |
 
@@ -620,7 +621,7 @@ suite never depends on Amazon or Flipkart being online.
 docker compose -f docker/docker-compose.yml up -d db
 docker compose -f docker/docker-compose.yml run --rm migrate
 docker compose -f docker/docker-compose.yml up api
-docker compose -f docker/docker-compose.yml --profile worker up   # phase 5
+docker compose -f docker/docker-compose.yml --profile worker up   # the worker
 ```
 
 The default image is lean and runs as a non-root user. For browser rendering, build against

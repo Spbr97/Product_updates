@@ -61,6 +61,7 @@ class TestStoreResolution:
             ("https://www.reliancedigital.in/product/x-123", "reliance-digital"),
             ("https://www.bigbasket.com/pd/1/x/", "bigbasket"),
             ("https://www.croma.com/x/p/317396", "croma"),
+            ("https://blinkit.com/prn/x/prid/12345", "blinkit"),
             ("https://some-other-shop.example.com/p/1", "generic"),
         ],
     )
