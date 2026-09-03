@@ -9,10 +9,11 @@ rules, and notifies you through configured providers — on a schedule, in the b
 Built to be extended: adding a store, a notification channel, or an alert condition means
 adding a module, not editing the tracking engine.
 
-> **Status: phases 1–6 of 7 complete.** Feature-complete: add products by URL, a
+> **Status: all 7 phases complete.** Add products by URL or find them by name, a
 > background worker checks them on their own interval, records history, and alerts
-> you — through an authenticated REST API or the CLI. Phase 7 is the quality pass —
-> see [Roadmap](#roadmap).
+> you — through an authenticated REST API, the CLI, or the web UI. 1,408 tests,
+> `ruff` and `mypy` clean, migrations reversible, and a
+> [performance review](docs/performance.md) with measured numbers.
 
 ---
 
@@ -718,4 +719,20 @@ docker build -f docker/Dockerfile `
 | 4 | Tracking rules, notification abstraction, providers, deduplication | **done** |
 | 5 | Scheduler, background worker, retries, rate limiting | **done** |
 | 6 | Complete API and CLI surface, auth, pagination | **done** |
-| 7 | Test coverage, Docker polish, docs, security and performance review | next |
+| 7 | Test coverage, Docker polish, docs, security and performance review | **done** |
+
+Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
+
+- **Test coverage** — 1,408 Python tests (unit, integration against a real PostgreSQL, and
+  the API surface) plus 32 Vitest tests for the UI. CI fails the build if the
+  database-backed tests are silently skipped.
+- **Docker** — multi-stage build (Node builds the SPA, and never enters the runtime
+  image), non-root user, healthchecks, `migrate` as a separate one-shot service.
+- **Docs** — this README, [`docs/architecture.md`](docs/architecture.md), and
+  [`docs/performance.md`](docs/performance.md).
+- **Security review** — SSRF guard with re-validation after redirects, per-user API keys
+  hashed at rest, secrets as `SecretStr` and stripped from logs, request-size and rate
+  limits, no CAPTCHA or anti-bot evasion anywhere.
+- **Performance review** — [`docs/performance.md`](docs/performance.md). It found one
+  real N+1 (a page of Product Entries cost 85 queries; now 6) and documents the scaling
+  boundaries that remain, with the numbers they were measured at.
