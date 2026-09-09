@@ -31,3 +31,7 @@ frontend/dist/
 frontend/**/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+
+# Your own tracking file. tracking.example.yaml is the template that ships,
+# the way .env.example is for settings -- what you actually watch is yours.
+tracking.yaml

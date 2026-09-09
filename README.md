@@ -44,6 +44,9 @@ adding a module, not editing the tracking engine.
 - **Find by name.** `product-tracker search "Galaxy S25"` (or `POST /api/v1/search`) asks
   every shop at once and returns ranked candidates, so nobody has to paste six links.
   Search is for **one named product**, not a category — see below.
+- **Declare what you track.** `tracking.yaml` says which products and listings this
+  installation watches, and `product-tracker init` applies it. Idempotent, so it can be
+  committed and re-applied on a new machine. See [§8a](#8a-declaring-what-you-track).
 - **Two interfaces.** A Typer CLI for humans and a versioned FastAPI for a future web or
   mobile frontend.
 
@@ -199,6 +202,7 @@ src/product_tracker/
   services/      Tracking + rule engines, statistics, change detection, comparison,
                  discovery/search, spec reading, variants, query policy, Product Entries
   services/spec_profiles/  Category YAML (phone, earbuds, powerbank, generic)
+  services/provisioning.py Applying a declarative tracking.yaml
   scheduler/     JobQueue interface, APScheduler implementation, throttling
   workers/       Entrypoints invoked by scheduled jobs
   api/           FastAPI app factory, routers, schemas, dependencies, error envelope
@@ -443,6 +447,49 @@ Every error response uses one envelope:
 { "error": { "type": "not_found", "message": "Product 42 not found", "detail": null } }
 ```
 
+## 8a. Declaring what you track
+
+Everything operational — database, providers, timeouts, politeness — lives in `.env`.
+What you *watch* lives in `tracking.yaml`, so it can be read, edited, diffed and committed:
+
+```powershell
+Copy-Item tracking.example.yaml tracking.yaml   # then edit
+product-tracker init --dry-run                  # see what it would do
+product-tracker init                            # apply it
+```
+
+```yaml
+delivery_pincode: "560037"
+
+products:
+  - name: "Apple iPhone 17"
+    brand: "Apple"
+    group: "iphone-17"        # optional: also build the comparison grid
+    label: "256GB"
+    listings:
+      - "https://www.flipkart.com/apple-iphone-17-black-256-gb/p/itm6eb39da622cdd"
+      - "https://www.croma.com/apple-iphone-17-256gb-black-/p/317396"
+    alerts:
+      - type: "price_dropped"
+      - type: "became_available"
+```
+
+**Applying is idempotent.** A listing you already track is reported as such, not added
+twice and not treated as an error — so the file is safe to re-apply after a rebuild or on
+a second machine, and it answers "what is this installation watching?" without querying
+the database. One bad URL reports itself and the rest still applies; a run that gives up
+after the first typo is a worse tool than one that tells you which line to fix.
+
+**It declares intent, not settings.** `delivery_pincode` is the one place the two touch,
+and `init` deliberately does *not* write it for you: settings come from the environment,
+and one setting with two sources is a setting that drifts. It compares the file against
+`DELIVERY_PINCODE` and tells you if they disagree, naming the line to add to `.env`.
+
+`tracking.yaml` is gitignored the way `.env` is; `tracking.example.yaml` is the template
+that ships. This replaces the `config.yaml` of the original brief, which also carried
+retailers, the schedule and matching terms — those now live in the store catalogue,
+`.env`, and the search scorer respectively.
+
 ## 9. Running the CLI
 
 ```powershell
@@ -451,6 +498,7 @@ product-tracker status          # config + database + tracking state
 product-tracker config          # effective settings, secrets redacted
 product-tracker stores list
 product-tracker stores sync
+product-tracker init [--file tracking.yaml] [--dry-run]   # apply a tracking file
 ```
 
 Exit codes: `0` success · `1` unexpected error · `2` not found · `3` store failure ·
@@ -657,6 +705,22 @@ day is delivered once, the same transition next week alerts again, and a rule's
    schema change is needed for the settings themselves).
 
 ## 14. Running tests
+
+**Use the IPv4 literal in `TEST_DATABASE_URL`, not `localhost`.** The compose file
+publishes Postgres on the IPv4 loopback only, while `localhost` resolves to IPv6 `::1`
+first — so every connection waits ~10s for that attempt to time out before falling back.
+Measured on Windows: ten connections took **101s** via `localhost` and **0.5s** via
+`127.0.0.1`, which turned a four-minute suite into a twenty-minute one.
+
+**Run it in parallel.** `pytest -n auto` gives each worker its own database
+(`tracker_test_gw0`, `gw1`, …), created on demand and reused between runs. On 8 workers
+the suite is **50 seconds** instead of 235.
+
+```powershell
+pytest -q -n auto        # the whole suite, parallel
+pytest -q                # serial, same result
+```
+
 
 ```powershell
 pytest                       # unit tests always; integration tests skip without a database

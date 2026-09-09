@@ -1,0 +1,50 @@
+# What this installation tracks.
+#
+#   Copy-Item tracking.example.yaml tracking.yaml   # then edit
+#   product-tracker init --dry-run                  # see what it would do
+#   product-tracker init                            # apply it
+#
+# Applying is idempotent: a listing you already track is reported as such, not added
+# twice and not treated as an error. So this file is safe to keep in version control and
+# re-apply after a rebuild, and it is the answer to "what is this installation watching?"
+# without querying the database.
+#
+# It declares *intent*. Everything operational -- database, notification providers,
+# timeouts, politeness -- lives in .env, because those are deployment settings and
+# splitting one setting across two files is how they drift.
+
+# The delivery area to ask shops about. Indian retailers price and stock per area, so
+# "the price" has a location in it; with none set, every check silently takes whatever
+# the shop's default area returns.
+#
+# `init` does not write this for you -- settings come from the environment by design.
+# It checks DELIVERY_PINCODE against this value and tells you if they disagree.
+delivery_pincode: "560037"
+
+products:
+  # The starter product from the original brief: the base iPhone 17, 256 GB.
+  #
+  # Note there is no "excluded_terms" list here any more. Search demotes and labels
+  # variants and accessories rather than dropping them -- a Pro Max or a case comes back
+  # flagged, ranked below the exact match, for you to judge. Direct listing URLs, as
+  # below, bypass the question entirely and are still the most reliable input.
+  - name: "Apple iPhone 17"
+    brand: "Apple"
+    # Creating a group lets `product-tracker compare iphone-17` (and /ui/compare/iphone-17)
+    # put every shop side by side. Omit it to track the listings without comparing them.
+    group: "iphone-17"
+    label: "256GB"
+    listings:
+      - "https://www.flipkart.com/apple-iphone-17-black-256-gb/p/itm6eb39da622cdd"
+      - "https://www.vijaysales.com/p/P245179/245183/apple-iphone-17-256gb-storage-sage"
+      - "https://www.croma.com/apple-iphone-17-256gb-black-/p/317396"
+      - "https://www.bigbasket.com/pd/40356301/apple-iphone-17-256gb-white-1-unit/"
+      - "https://www.reliancedigital.in/product/apple-iphone-17-256-gb-black-mff8ru-9391619"
+    # Alert rules applied to every listing above. Types: price_changed, price_dropped,
+    # price_increased, price_below_target (needs `target`), became_available,
+    # became_unavailable.
+    alerts:
+      - type: "price_dropped"
+      - type: "became_available"
+      # - type: "price_below_target"
+      #   target: 79999

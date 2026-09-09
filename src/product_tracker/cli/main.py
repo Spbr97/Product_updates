@@ -15,7 +15,18 @@ from .. import __version__
 from ..core.config import get_settings
 from ..core.logging import configure_logging
 from ..domain.errors import ConfigurationError
-from . import alerts, discover, entries, groups, history, products, system, users, worker
+from . import (
+    alerts,
+    discover,
+    entries,
+    groups,
+    history,
+    products,
+    provision,
+    system,
+    users,
+    worker,
+)
 from .formatting import ExitCode, error, stdout
 
 app = typer.Typer(
@@ -28,6 +39,7 @@ app = typer.Typer(
 app.add_typer(system.stores_app, name="stores")
 app.command("status")(system.status)
 app.command("config")(system.config_show)
+app.command("init")(provision.init)
 
 app.command("add")(products.add)
 app.command("list")(products.list_products)
