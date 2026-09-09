@@ -121,6 +121,7 @@ def search_products(
         store_slugs=targets,
         limit_per_store=payload.limit_per_store,
         allow_browser=payload.allow_browser,
+        exclude=tuple(payload.exclude),
     )
 
     # The query itself is not logged: it is a person's shopping intent, and this project

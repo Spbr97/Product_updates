@@ -13,7 +13,7 @@ candidates come back with their score and their qualifiers, and a person -- or a
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
 
@@ -32,6 +32,7 @@ from ..stores.search import (
     available_searches,
     load_search_config,
     search_for,
+    tokenise,
 )
 from ..utils.urls import host_of
 from .query_policy import require_specific
@@ -104,6 +105,27 @@ def unsearchable_stores() -> tuple[str, ...]:
     )
 
 
+def _without(discovery: Discovery, exclude: Sequence[str]) -> Discovery:
+    """Drop hits whose title carries an excluded word.
+
+    Whole words, matched case-insensitively against the same tokenisation search scores
+    with, so "pro" excludes "iPhone 17 Pro" without also excluding a "Professional" case
+    by substring -- and so "case" cannot fire on "Showcase".
+    """
+    banned = {word.strip().casefold() for word in exclude if word.strip()}
+    if not banned:
+        return discovery
+
+    kept = tuple(
+        replace(
+            result,
+            hits=tuple(h for h in result.hits if not banned & set(tokenise(h.title))),
+        )
+        for result in discovery.results
+    )
+    return Discovery(query=discovery.query, results=kept)
+
+
 def discover(
     query: str,
     settings: Settings,
@@ -112,6 +134,7 @@ def discover(
     limit_per_store: int = 8,
     allow_browser: bool = True,
     guard: CheckGuard | None = None,
+    exclude: Sequence[str] = (),
 ) -> Discovery:
     """Search every configured store for ``query``.
 
@@ -127,6 +150,13 @@ def discover(
     A store that fails contributes a failed result rather than an exception, so one blocked
     retailer never costs the others their answers -- the same contract product checks hold
     themselves to.
+
+    ``exclude`` drops hits whose title contains any of those words, which is a different
+    and blunter thing than the built-in qualifiers. Qualifiers *label* a near-match and let
+    the person judge -- an S25 FE is still shown when an S25 was asked for, because only
+    they know whether that is close enough. An excluded word is a decision already made:
+    "never show me a refurbished one". The tracker does not guess which you want, so both
+    exist and the caller picks.
     """
     # Before a single request leaves the machine. A query that names a category rather
     # than a product cannot be answered by any of these routes -- see ``query_policy`` --
@@ -194,6 +224,9 @@ def discover(
     # price comparison whose rows say "(no price)" for four shops out of six has not
     # compared anything. This fetches the product pages of the best few, which is the same
     # request a tracked listing's check makes.
+    if exclude:
+        discovery = _without(discovery, exclude)
+
     discovery = _with_prices(discovery, ctx, settings, guard)
 
     log.info(

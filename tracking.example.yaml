@@ -24,10 +24,8 @@ delivery_pincode: "560037"
 products:
   # The starter product from the original brief: the base iPhone 17, 256 GB.
   #
-  # Note there is no "excluded_terms" list here any more. Search demotes and labels
-  # variants and accessories rather than dropping them -- a Pro Max or a case comes back
-  # flagged, ranked below the exact match, for you to judge. Direct listing URLs, as
-  # below, bypass the question entirely and are still the most reliable input.
+  # Direct listing URLs bypass search entirely and are the most reliable input, so the
+  # exclusions below do not apply to them -- they matter for `product-tracker search`.
   - name: "Apple iPhone 17"
     brand: "Apple"
     # Creating a group lets `product-tracker compare iphone-17` (and /ui/compare/iphone-17)
@@ -43,6 +41,17 @@ products:
     # Alert rules applied to every listing above. Types: price_changed, price_dropped,
     # price_increased, price_below_target (needs `target`), became_available,
     # became_unavailable.
+    # The original brief's rule: never show me these, whatever they score. Pass the same
+    # list to a search with `--exclude pro,air,refurbished`.
+    #
+    # Distinct from the qualifiers a search reports on its own: a qualifier *labels* a
+    # near-match and leaves the judgement to you -- an iPhone 17 Pro still appears when
+    # you asked for an iPhone 17, flagged and ranked below the exact match. An excluded
+    # word is a judgement already made. Both exist because collapsing them would mean
+    # either dropping something you wanted or never being able to say "not that one".
+    excluded_terms: ["pro", "pro max", "air", "refurbished", "renewed", "used",
+                     "case", "cover", "screen protector"]
+
     alerts:
       - type: "price_dropped"
       - type: "became_available"

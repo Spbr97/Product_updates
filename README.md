@@ -11,7 +11,7 @@ adding a module, not editing the tracking engine.
 
 > **Status: all 7 phases complete.** Add products by URL or find them by name, a
 > background worker checks them on their own interval, records history, and alerts
-> you — through an authenticated REST API, the CLI, or the web UI. 1,423 tests,
+> you — through an authenticated REST API, the CLI, or the web UI. 1,444 tests,
 > `ruff` and `mypy` clean, migrations reversible, and a
 > [performance review](docs/performance.md) with measured numbers.
 
@@ -108,6 +108,20 @@ Where each shop stands, verified 2026-09-02:
 **Flipkart needs the maker's name.** They publish listings per brand, not per model, so
 `"Samsung Galaxy S25"` finds it and `"Galaxy S25"` gets a message asking for the brand
 rather than four wasted requests. Every other shop is happy with either.
+
+**Excluding variants and accessories.** A search *labels* near-matches rather than
+dropping them — an iPhone 17 Pro comes back flagged and ranked below the exact match,
+because only you know whether that is close enough. When it is not, say so:
+
+```powershell
+product-tracker search "iPhone 17" --exclude pro,air,refurbished,case
+```
+
+Matched as whole words, case-insensitively, so `case` drops "Silicone Case" without
+dropping "Showcase". `POST /api/v1/search` takes the same list as `exclude`, and
+`tracking.yaml` carries it per product as `excluded_terms`. The two mechanisms are kept
+apart on purpose: a qualifier is a judgement left to you, an excluded word is one already
+made.
 
 **Search only accepts a named product.** "Galaxy S25" works; "phone", "earbuds" and
 "best power bank" are refused with a message saying why. This is not fussiness: a shop's
@@ -312,6 +326,25 @@ line there, with no change to the fetch path or any adapter.
 
 ## 7. Database setup
 
+```powershell
+product-tracker db up        # starts PostgreSQL, migrates it, creates the test database
+product-tracker db status    # is it running, healthy, and reachable?
+product-tracker db down      # stop it; your data stays on the volume
+```
+
+`db up` starts Docker itself if it is installed but not running, so "nothing is set up
+yet" and "it is already running" both end in a working database. It prints the two DSNs to
+put in `.env`. Everything below is what that command does for you, for when you would
+rather do it yourself or are pointing at a PostgreSQL you already run.
+
+**Why a server database for a local tool.** Concurrent writers (the worker, the API and
+your CLI all write at once), `SELECT … FOR UPDATE` so per-store pacing is shared across
+processes, an advisory lock so a second worker refuses to start, JSONB rule params so a new
+alert condition needs no migration, and a partial unique index for one live listing per
+shop. SQLite gives up the first three; embedded/WASM PostgreSQL gives up the first two. The
+cost of the choice was never capability, it was setup — which is what `db up` is for.
+
+
 Start PostgreSQL and apply migrations:
 
 ```powershell
@@ -499,6 +532,7 @@ product-tracker config          # effective settings, secrets redacted
 product-tracker stores list
 product-tracker stores sync
 product-tracker init [--file tracking.yaml] [--dry-run]   # apply a tracking file
+product-tracker db up | status | down                    # the PostgreSQL it runs on
 ```
 
 Exit codes: `0` success · `1` unexpected error · `2` not found · `3` store failure ·
@@ -824,7 +858,7 @@ docker build -f docker/Dockerfile `
 
 Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
 
-- **Test coverage** — 1,423 Python tests (unit, integration against a real PostgreSQL, and
+- **Test coverage** — 1,444 Python tests (unit, integration against a real PostgreSQL, and
   the API surface) plus 56 Vitest tests for the UI. CI fails the build if the
   database-backed tests are silently skipped.
 - **Docker** — multi-stage build (Node builds the SPA, and never enters the runtime

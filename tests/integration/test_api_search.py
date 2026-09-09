@@ -11,7 +11,7 @@ online, and a fan-out across four shops is not something to stub selector by sel
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from decimal import Decimal
 
 import pytest
@@ -73,6 +73,7 @@ def stub(monkeypatch: pytest.MonkeyPatch, *results: SearchResult) -> list[dict[s
         limit_per_store: int = 8,
         allow_browser: bool = True,
         guard: object = None,
+        exclude: Sequence[str] = (),
     ) -> Discovery:
         calls.append(
             {
@@ -80,6 +81,7 @@ def stub(monkeypatch: pytest.MonkeyPatch, *results: SearchResult) -> list[dict[s
                 "store_slugs": store_slugs,
                 "limit_per_store": limit_per_store,
                 "allow_browser": allow_browser,
+                "exclude": tuple(exclude),
             }
         )
         return Discovery(query=query, results=results)

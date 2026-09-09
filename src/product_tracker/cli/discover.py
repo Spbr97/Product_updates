@@ -91,6 +91,13 @@ def search(
             help="Render JavaScript shops when the quick pass finds no exact match.",
         ),
     ] = True,
+    exclude: Annotated[
+        str | None,
+        typer.Option(
+            "--exclude",
+            help='Drop hits whose title has any of these words, e.g. "pro,used,case".',
+        ),
+    ] = None,
 ) -> None:
     """Search the supported shops for a product, without tracking anything.
 
@@ -104,7 +111,12 @@ def search(
         info("searching... (JavaScript shops are rendered only if this finds nothing)")
     try:
         found = discovery.discover(
-            query, settings, store_slugs=stores, limit_per_store=limit, allow_browser=browser
+            query,
+            settings,
+            store_slugs=stores,
+            limit_per_store=limit,
+            allow_browser=browser,
+            exclude=tuple(w for w in (exclude or "").split(",") if w.strip()),
         )
     except ValidationError as exc:
         # A query naming a category rather than a product. Refused before any shop is

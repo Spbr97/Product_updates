@@ -8,6 +8,7 @@ from product_tracker.domain.enums import SearchOutcome
 from product_tracker.domain.models import SearchHit, SearchResult
 from product_tracker.services.discovery import (
     Discovery,
+    _without,
     searchable_stores,
     unsearchable_stores,
 )
@@ -439,3 +440,68 @@ class TestWhoseFaultItIs:
 
     def test_a_timeout_is_counted(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
         assert self.outcomes_recorded(monkeypatch, SearchOutcome.TIMEOUT) == [False]
+
+
+class TestExcludedTerms:
+    """The original brief's rule: "a listing is accepted only when its title contains
+    every required term and none of the excluded terms".
+
+    Deliberately a different mechanism from qualifiers, and both are kept. A qualifier
+    *labels* a near-match and leaves the judgement to the person -- an S25 FE is still
+    shown when an S25 was asked for, because only they know if that is close enough. An
+    excluded word is a judgement already made: never show me a refurbished one. Collapsing
+    the two would mean either silently dropping products someone wanted, or never being
+    able to say "not that one".
+    """
+
+    def found(self) -> Discovery:
+        return Discovery(
+            query="iPhone 17",
+            results=(
+                ok(
+                    "flipkart",
+                    hit("flipkart", "Apple iPhone 17", 1.0),
+                    hit("flipkart", "Apple iPhone 17 Pro", 1.0, ("pro",)),
+                    hit("flipkart", "Apple iPhone 17 Refurbished", 1.0, ("refurbished",)),
+                    hit("flipkart", "Silicone Case for iPhone 17", 1.0, ("case",)),
+                ),
+            ),
+        )
+
+    def test_an_excluded_word_removes_the_hit_entirely(self) -> None:
+        kept = _without(self.found(), ("pro",)).hits
+
+        assert "Apple iPhone 17 Pro" not in [h.title for h in kept]
+        assert "Apple iPhone 17" in [h.title for h in kept]
+
+    def test_several_words_at_once(self) -> None:
+        kept = _without(self.found(), ("pro", "refurbished", "case")).hits
+
+        assert [h.title for h in kept] == ["Apple iPhone 17"]
+
+    def test_matching_is_case_insensitive(self) -> None:
+        kept = _without(self.found(), ("PRO", "  Refurbished  ")).hits
+
+        assert all("Pro" not in h.title and "Refurbished" not in h.title for h in kept)
+
+    def test_whole_words_only(self) -> None:
+        """"case" must not fire on "Showcase", or an exclusion list quietly eats the
+        product it was meant to protect."""
+        found = Discovery(
+            query="iPhone 17",
+            results=(ok("flipkart", hit("flipkart", "iPhone 17 Showcase Edition", 1.0)),),
+        )
+
+        assert len(_without(found, ("case",)).hits) == 1
+
+    def test_no_exclusions_changes_nothing(self) -> None:
+        original = self.found()
+
+        assert _without(original, ()).hits == original.hits
+        assert _without(original, ("   ",)).hits == original.hits
+
+    def test_qualifiers_still_only_label(self) -> None:
+        """Without an explicit exclusion, a near-match is reported, not dropped."""
+        titles = [h.title for h in self.found().hits]
+
+        assert "Apple iPhone 17 Pro" in titles

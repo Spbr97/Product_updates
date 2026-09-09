@@ -17,6 +17,7 @@ from ..core.logging import configure_logging
 from ..domain.errors import ConfigurationError
 from . import (
     alerts,
+    database,
     discover,
     entries,
     groups,
@@ -36,6 +37,7 @@ app = typer.Typer(
     add_completion=False,
 )
 
+app.add_typer(database.db_app, name="db")
 app.add_typer(system.stores_app, name="stores")
 app.command("status")(system.status)
 app.command("config")(system.config_show)

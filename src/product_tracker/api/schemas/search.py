@@ -32,6 +32,17 @@ class SearchRequest(BaseModel):
     limit_per_store: int = Field(
         default=8, ge=1, le=25, description="Candidates to keep from each store."
     )
+    exclude: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description=(
+            "Drop hits whose title contains any of these words, matched whole and "
+            "case-insensitively. Different from the qualifiers a hit reports: a qualifier "
+            "labels a near-match for you to judge, while an excluded word is a judgement "
+            "already made."
+        ),
+        examples=[["pro", "refurbished", "case"]],
+    )
     allow_browser: bool = Field(
         default=False,
         description=(
