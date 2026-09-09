@@ -77,6 +77,27 @@ class TestCreate:
         assert response.status_code == 422
         assert "non-public" in response.json()["error"]["message"]
 
+    def test_an_ssrf_block_is_its_own_error_type(
+        self, client: TestClient, strict_url_policy: None
+    ) -> None:
+        """Distinct from validation_error, and the distinction is the point.
+
+        "That URL is malformed" and "that URL resolves somewhere we refuse to fetch" call
+        for different responses from a caller: one is a typo to correct, the other is a
+        security boundary doing its job. Reported under one code, a client cannot tell
+        which happened -- the same collapsing of two different facts this project refuses
+        to do with stock.
+        """
+        blocked = client.post(
+            "/api/v1/products", json={"url": "http://169.254.169.254/latest/meta-data/"}
+        )
+        malformed = client.post("/api/v1/products", json={"url": "not-a-url"})
+
+        assert blocked.json()["error"]["type"] == "ssrf_blocked"
+        assert malformed.json()["error"]["type"] != "ssrf_blocked"
+        # Same status, different code: no status contract moves for this.
+        assert blocked.status_code == malformed.status_code == 422
+
     def test_missing_url_field_returns_422(self, client: TestClient) -> None:
         assert client.post("/api/v1/products", json={}).status_code == 422
 

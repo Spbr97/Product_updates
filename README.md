@@ -11,7 +11,7 @@ adding a module, not editing the tracking engine.
 
 > **Status: all 7 phases complete.** Add products by URL or find them by name, a
 > background worker checks them on their own interval, records history, and alerts
-> you — through an authenticated REST API, the CLI, or the web UI. 1,444 tests,
+> you — through an authenticated REST API, the CLI, or the web UI. 1,459 tests,
 > `ruff` and `mypy` clean, migrations reversible, and a
 > [performance review](docs/performance.md) with measured numbers.
 
@@ -480,6 +480,22 @@ Every error response uses one envelope:
 { "error": { "type": "not_found", "message": "Product 42 not found", "detail": null } }
 ```
 
+`type` is a stable machine code — branch on it rather than on the message:
+
+| `type` | Status | Means |
+|---|---|---|
+| `validation_error` | 422 | The input is not acceptable. |
+| `ssrf_blocked` | 422 | The URL resolves to a private, loopback or reserved address. Distinct from `validation_error` on purpose: a malformed URL is a typo, this is a security boundary. |
+| `invalid_store_url` | 422 | A URL for the wrong retailer, e.g. a Flipkart link in the Amazon field. |
+| `unsupported_store` | 422 | No adapter handles that domain. |
+| `not_found` | 404 | No such object — also what another account's object returns, so ids cannot be enumerated. |
+| `conflict` | 409 | Already exists. |
+| `duplicate_listing` | 409 | That URL is already live in one of your Product Entries; the message names which. |
+| `store_failure` | 502 | The shop itself failed. Rare from a route: a failed *check* is a recorded 200, not an error. |
+| `configuration_error` | 500 | The deployment is misconfigured. |
+
+Authentication failures are 401 from the dependency layer, before any of these.
+
 ## 8a. Declaring what you track
 
 Everything operational — database, providers, timeouts, politeness — lives in `.env`.
@@ -858,7 +874,7 @@ docker build -f docker/Dockerfile `
 
 Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
 
-- **Test coverage** — 1,444 Python tests (unit, integration against a real PostgreSQL, and
+- **Test coverage** — 1,459 Python tests (unit, integration against a real PostgreSQL, and
   the API surface) plus 56 Vitest tests for the UI. CI fails the build if the
   database-backed tests are silently skipped.
 - **Docker** — multi-stage build (Node builds the SPA, and never enters the runtime

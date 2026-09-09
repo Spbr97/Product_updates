@@ -23,6 +23,7 @@ from ..domain.errors import (
     NotFoundError,
     ProductTrackerError,
     StoreError,
+    UnsafeURLError,
     ValidationError,
 )
 
@@ -40,9 +41,15 @@ _ERROR_MAP: tuple[tuple[type[Exception], int, str], ...] = (
     (DuplicateError, status.HTTP_409_CONFLICT, "conflict"),
     (NoAdapterError, _HTTP_422, "unsupported_store"),
     (InvalidStoreURLError, _HTTP_422, "invalid_store_url"),
+    # Also a ValidationError subclass, and it must keep its own code. "your URL is
+    # malformed" and "your URL resolves somewhere we refuse to fetch" call for different
+    # responses from a caller -- one is a typo, the other is a security boundary doing its
+    # job -- and reporting both as validation_error leaves no way to tell them apart. The
+    # status stays 422; only the envelope type is more specific.
+    (UnsafeURLError, _HTTP_422, "ssrf_blocked"),
     (ValidationError, _HTTP_422, "validation_error"),
     (ConfigurationError, status.HTTP_500_INTERNAL_SERVER_ERROR, "configuration_error"),
-    (StoreError, status.HTTP_502_BAD_GATEWAY, "store_error"),
+    (StoreError, status.HTTP_502_BAD_GATEWAY, "store_failure"),
 )
 
 
