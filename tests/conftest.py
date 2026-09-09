@@ -68,6 +68,26 @@ def dummy_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _wide_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Render CLI tables at a fixed width, whatever the terminal is.
+
+    Rich sizes a table to the console, and elides cell content that will not fit. The CLI
+    tests assert on what a table *says*, not how it is laid out, so without this they pass
+    or fail on the width of whoever's terminal is running them. That is not theoretical:
+    they passed locally and in serial CI for months, then three of them failed the moment
+    pytest-xdist changed the width Rich detected. Reproducible with COLUMNS=80.
+
+    Setting COLUMNS is not enough: Rich ignores it when the output is not a terminal, and
+    CliRunner captures it. The width is set on the Console objects themselves, which every
+    CLI module shares by importing the same instance.
+    """
+    from product_tracker.cli import formatting
+
+    for console in (formatting.stdout, formatting.stderr):
+        monkeypatch.setattr(console, "_width", 200, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolated_sitemap_cache(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
