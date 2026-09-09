@@ -67,6 +67,27 @@ def dummy_env(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_settings_cache()
 
 
+@pytest.fixture(autouse=True)
+def _isolated_sitemap_cache(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Give every test its own sitemap cache directory.
+
+    ``sitemaps.cache_dir()`` is a single folder under the system temp, shared by every
+    process on the machine. That is right in production -- a downloaded catalogue is
+    worth reusing between runs -- and wrong under ``pytest -n``, where two dozen workers
+    read, rewrite and delete each other's ``shop.json`` and the suite goes flaky: three
+    consecutive full runs gave a pass, an error and a failure before this.
+
+    Isolating it also stops a developer's real cached catalogues from changing what the
+    tests see, which is the same bug wearing a different hat.
+    """
+    from product_tracker.stores import sitemaps
+
+    directory = tmp_path_factory.mktemp("sitemaps")
+    monkeypatch.setattr(sitemaps, "cache_dir", lambda: directory)
+
+
 # --- Database-backed fixtures ------------------------------------------------------
 
 
@@ -74,8 +95,40 @@ def _test_database_url() -> str | None:
     return os.environ.get("TEST_DATABASE_URL")
 
 
+def _ensure_database(url: str) -> None:
+    """Create the target database if it does not exist yet.
+
+    Only reached under xdist, where each worker gets its own. Connects to ``postgres``
+    to do it, because you cannot create a database from inside itself.
+    """
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.engine import make_url
+
+    target = make_url(url)
+    engine = create_engine(target.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    try:
+        with engine.connect() as conn:
+            found = conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": target.database},
+            ).scalar()
+            if not found:
+                conn.execute(text(f'CREATE DATABASE "{target.database}"'))
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture(scope="session")
-def database_url() -> str:
+def database_url(worker_id: str) -> str:
+    """The throwaway database this session migrates.
+
+    Under ``pytest -n``, each worker gets its own: they migrate up at session start and
+    down at the end, and truncate between tests, so a shared database would have workers
+    dropping tables out from under each other. The name is suffixed with the worker id
+    (``tracker_test_gw3``) and created on demand, then left in place between runs -- a
+    re-run reuses it rather than paying to recreate it. They hold no data: the session
+    fixture migrates down to base on the way out.
+    """
     url = _test_database_url()
     if not url:
         pytest.skip(
@@ -83,7 +136,18 @@ def database_url() -> str:
             "(docker compose -f docker/docker-compose.yml up -d db) and set it to a "
             "throwaway database to run integration tests."
         )
-    return url
+    if worker_id == "master":
+        return url
+
+    from sqlalchemy.engine import make_url
+
+    target = make_url(url)
+    scoped = target.set(database=f"{target.database}_{worker_id}").render_as_string(
+        hide_password=False
+    )
+    _ensure_database(scoped)
+    return scoped
+
 
 
 @pytest.fixture(scope="session")

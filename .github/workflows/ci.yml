@@ -130,14 +130,15 @@ jobs:
       - name: Run the suite
         env:
           # Integration tests migrate this database up and tear it down.
-          TEST_DATABASE_URL: postgresql+psycopg://tracker:tracker@localhost:5432/tracker_test
-        run: pytest -q --cov=product_tracker --cov-report=term-missing:skip-covered
+          TEST_DATABASE_URL: postgresql+psycopg://tracker:tracker@127.0.0.1:5432/tracker_test
+        # -n auto: one worker per core, each with its own database (see tests/conftest.py).
+        run: pytest -q -n auto --cov=product_tracker --cov-report=term-missing:skip-covered
 
       - name: Fail if the DB-backed tests were skipped
         # Without this, a broken TEST_DATABASE_URL would silently skip ~330 tests and the
         # job would still be green -- which is worse than a red build.
         env:
-          TEST_DATABASE_URL: postgresql+psycopg://tracker:tracker@localhost:5432/tracker_test
+          TEST_DATABASE_URL: postgresql+psycopg://tracker:tracker@127.0.0.1:5432/tracker_test
         run: |
           count=$(pytest -q --collect-only -m db 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)
           echo "database-backed tests collected: $count"
@@ -177,7 +178,7 @@ jobs:
         # The second upgrade is the point: it catches anything created but not dropped,
         # such as an enum type, which would fail on "already exists".
         env:
-          DATABASE_URL: postgresql+psycopg://tracker:tracker@localhost:5432/tracker
+          DATABASE_URL: postgresql+psycopg://tracker:tracker@127.0.0.1:5432/tracker
         run: |
           alembic upgrade head
           alembic downgrade base
@@ -188,7 +189,7 @@ jobs:
         # text() construct come out as NULL. This has produced a broken seed migration
         # before, so it is checked.
         env:
-          DATABASE_URL: postgresql+psycopg://tracker:tracker@localhost:5432/tracker
+          DATABASE_URL: postgresql+psycopg://tracker:tracker@127.0.0.1:5432/tracker
         run: |
           alembic downgrade base
           alembic upgrade head --sql > /tmp/schema.sql

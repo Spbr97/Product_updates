@@ -44,6 +44,11 @@ services:
       # with INSERT allowed, so reaching Postgres is a way around the API's auth
       # rather than merely a way past it. Set POSTGRES_PORT to change the host port;
       # to expose it deliberately, write the interface you mean.
+      #
+      # Because this is IPv4-only, clients must connect to 127.0.0.1 and not to
+      # `localhost`, which resolves to IPv6 ::1 first and costs ~10s per connection
+      # waiting for that attempt to time out. .env.example uses the literal for this
+      # reason; if you change this line, change those DSNs to match.
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
