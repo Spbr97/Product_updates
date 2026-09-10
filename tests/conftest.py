@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from tests import netguard
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -106,6 +107,26 @@ def _isolated_sitemap_cache(
 
     directory = tmp_path_factory.mktemp("sitemaps")
     monkeypatch.setattr(sitemaps, "cache_dir", lambda: directory)
+
+
+# --- Network isolation -------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Refuse any connection that is not to loopback or the test database.
+
+    See ``tests/netguard.py`` for why this is enforced rather than assumed.
+    """
+    if netguard.ALLOW_NETWORK:
+        yield
+        return
+
+    netguard.install(monkeypatch)
+    yield
+    complaint = netguard.report()
+    if complaint:
+        pytest.fail(complaint, pytrace=False)
 
 
 # --- Database-backed fixtures ------------------------------------------------------

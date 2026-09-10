@@ -262,6 +262,18 @@ class TestConfigValidation:
 
 
 class TestRenderMode:
+    @pytest.fixture(autouse=True)
+    def _robots_allow(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Answer the robots check locally, rather than off a real retailer.
+
+        Two of these tests run a search for real, and the robots read that precedes it
+        went out to the live host. Both tolerate the failure and passed either way, which
+        is why it went unnoticed -- but a unit test has no business calling a shop.
+        """
+        from product_tracker.stores import robots
+
+        monkeypatch.setattr(robots, "is_allowed", lambda url, ctx: True)
+
     def test_stores_default_to_http(self) -> None:
         """Adding rendering must not quietly change what existing shops do."""
         for slug in ("amazon-in", "flipkart"):

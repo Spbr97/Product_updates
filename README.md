@@ -787,6 +787,14 @@ Integration tests need `TEST_DATABASE_URL` pointing at a **throwaway** database 
 migrates it up and tears it down. Store-extraction tests run against saved fixtures, so the
 suite never depends on Amazon or Flipkart being online.
 
+**That last claim is enforced, not assumed.** `tests/netguard.py` blocks every connection
+that is not to loopback or the test database, and a test that attempts one fails at
+teardown naming the host. Both halves are needed: two unit tests used to fetch a real
+`robots.txt`, tolerate the failure and pass either way, so nothing ever complained.
+Grepping for stubs would not have found them — it shows which files *mention* a stub, not
+whether some path slips out anyway. Set `PRODUCT_TRACKER_ALLOW_NETWORK=1` for the
+deliberate live acceptance pass, where reaching real shops is the point.
+
 ### CI
 
 `.github/workflows/ci.yml` runs on every push and pull request, in four jobs:
