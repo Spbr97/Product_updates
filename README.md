@@ -286,6 +286,12 @@ most:
 | `BLOCK_PRIVATE_ADDRESSES` | `true` | SSRF guard. Rejects URLs resolving to private/loopback ranges — on the URL you give it and again on **every hop of a redirect chain**, before each is dialled. |
 | `NOTIFY_DEFAULT_PROVIDERS` | `console` | Comma-separated provider slugs. |
 
+**A bot wall reads as blocked, not as a missing price.** Walls come in two shapes: the
+words one shows a person ("are you a robot"), and the modern kind, which is a script tag
+and an empty div with no prose at all. Amazon India serves the second, as HTTP `202`. Both
+are detected, so a shop that refused to show a page is reported as refusing rather than as
+a page whose selectors need fixing — and never, in either case, as out of stock.
+
 Every response carries an `X-Request-ID`. Send your own and it is kept — so an id from a
 proxy, or one you are already using to correlate across services, survives into these
 logs; otherwise one is generated. It is bound for the life of the request, so every line

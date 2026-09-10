@@ -334,6 +334,89 @@ class TestStatusMapping:
         assert _status_for(result) is expected
 
 
+class TestABotWallIsNotAParseFailure:
+    """A wall must read as a wall, whatever shape it arrives in.
+
+    The markers used to be the words a wall shows a person -- "are you a robot", "unusual
+    traffic". A WAF challenge has no prose in it at all: a script tag and an empty div.
+    Amazon India serves exactly that, as HTTP 202, and it passed as a successful fetch;
+    extraction then found no price and the page was reported as "price not found". That
+    sends someone to check their selectors when the shop never showed them a product.
+
+    The fixture is the real page, captured live on 10 September 2026, with its per-request
+    credentials blanked. An invented one would only prove the regex matches itself.
+    """
+
+    def test_the_real_challenge_page_has_no_captcha_wording(self) -> None:
+        """The reason the old markers missed it, pinned so it cannot be argued away."""
+        page = load("awswaf_challenge.html")
+
+        assert "captcha" not in page.lower()
+        assert "unusual traffic" not in page.lower()
+
+    def test_it_is_classified_as_blocked(self) -> None:
+        url = "https://shop.example.com/p/walled"
+        respx.get(url).mock(
+            return_value=httpx.Response(202, html=load("awswaf_challenge.html"))
+        )
+
+        result = GenericStoreAdapter().fetch_product(url, CTX)
+
+        assert result.outcome is FetchOutcome.BLOCKED
+
+    def test_a_wall_is_never_read_as_out_of_stock(self) -> None:
+        """The invariant this whole project is organised around. A shop that refused to
+        show us the page has said nothing whatever about whether it has stock."""
+        url = "https://shop.example.com/p/walled-stock"
+        respx.get(url).mock(
+            return_value=httpx.Response(202, html=load("awswaf_challenge.html"))
+        )
+
+        result = GenericStoreAdapter().fetch_product(url, CTX)
+
+        assert result.availability is Availability.UNKNOWN
+        assert result.price is None
+
+    @pytest.mark.parametrize(
+        ("vendor", "marker"),
+        [
+            ("AWS WAF", '<script src="https://x.token.awswaf.com/challenge.js"></script>'),
+            ("Imperva", "var _Incapsula_Resource = '/_Incapsula_Resource?SWJIYLWA'"),
+            ("Akamai", '<script src="/_sec/cp_challenge/ak-challenge.js"></script>'),
+            ("DataDome", "<script>var dd={'host':'datadome.co'}</script>"),
+            ("Cloudflare", '<script src="/cdn-cgi/challenge-platform/h/b/orchestrate"></script>'),
+        ],
+    )
+    def test_the_other_walls_in_common_use(self, vendor: str, marker: str) -> None:
+        """So this is not a patch for one retailer. Each of these is a wall that shows a
+        person nothing and a script everything."""
+        url = f"https://shop.example.com/p/{vendor.replace(' ', '-').lower()}"
+        respx.get(url).mock(
+            return_value=httpx.Response(200, html=f"<html><head>{marker}</head></html>")
+        )
+
+        result = GenericStoreAdapter().fetch_product(url, CTX)
+
+        assert result.outcome is FetchOutcome.BLOCKED, vendor
+
+    def test_an_ordinary_page_saying_challenge_is_not_blocked(self) -> None:
+        """The false-positive guard. Shops sell things called challenges; the markers are
+        vendor fingerprints rather than English for exactly this reason."""
+        url = "https://shop.example.com/p/challenge-coin"
+        respx.get(url).mock(
+            return_value=httpx.Response(
+                200,
+                html=load("jsonld_in_stock.html").replace(
+                    "</body>", "<p>The Challenge Series: a challenge for every player</p></body>"
+                ),
+            )
+        )
+
+        result = GenericStoreAdapter().fetch_product(url, CTX)
+
+        assert result.outcome is not FetchOutcome.BLOCKED
+
+
 class TestBrowserFallback:
     """The generic and Flipkart adapters both fall back to rendering.
 

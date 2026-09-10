@@ -31,10 +31,26 @@ log = get_logger(__name__)
 
 #: Phrases that indicate an anti-bot interstitial rather than a product page. Matched only
 #: against the first part of the body, where such pages put their message.
+#: Two kinds of marker, because a bot wall comes in two shapes.
+#:
+#: The first are the words a wall shows a person -- "are you a robot", "unusual traffic".
+#: Those were all this looked for, and they miss the modern kind entirely: a WAF challenge
+#: is a script tag and an empty div, with no prose in it at all. Amazon India serves one,
+#: as HTTP *202*, and it sailed through as a successful fetch. Extraction then found no
+#: price, so the page was reported as "price not found" -- which sends someone to check
+#: their selectors when the truth is that the shop never showed them a product page.
+#:
+#: The second are the vendors' own fingerprints: the script host, the container element.
+#: They are specific strings rather than English, so they do not false-positive on a
+#: product page that happens to use the word "challenge".
 _BLOCK_MARKERS = re.compile(
     r"(captcha|are you a human|are you a robot|unusual traffic|access denied"
     r"|verify you are|bot detection|cf-browser-verification|/errors/validateCaptcha"
-    r"|request blocked|pardon our interruption)",
+    r"|request blocked|pardon our interruption"
+    # AWS WAF -- what Amazon India answers with.
+    r"|awswaf|AwsWafIntegration|challenge-container"
+    # The other walls in common use, so this is not a one-retailer patch.
+    r"|_Incapsula_Resource|/_sec/cp_challenge/|datadome|/challenge-platform/)",
     re.IGNORECASE,
 )
 _BLOCK_SCAN_BYTES = 20_000
