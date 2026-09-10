@@ -286,17 +286,14 @@ most:
 | `BLOCK_PRIVATE_ADDRESSES` | `true` | SSRF guard. Rejects URLs resolving to private/loopback ranges — on the URL you give it and again on **every hop of a redirect chain**, before each is dialled. |
 | `NOTIFY_DEFAULT_PROVIDERS` | `console` | Comma-separated provider slugs. |
 
-**A bot wall reads as blocked, not as a missing price.** Walls come in two shapes: the
-words one shows a person ("are you a robot"), and the modern kind, which is a script tag
-and an empty div with no prose at all. Amazon India serves the second, as HTTP `202`. Both
-are detected, so a shop that refused to show a page is reported as refusing rather than as
-a page whose selectors need fixing — and never, in either case, as out of stock.
+**A bot wall reads as `blocked`, not as a missing price.** Both shapes are detected: the
+words a wall shows a person, and the modern kind that is a script tag and an empty div
+with no prose at all — Amazon India serves that one, as HTTP `202`. Neither is ever read
+as out of stock.
 
-Every response carries an `X-Request-ID`. Send your own and it is kept — so an id from a
-proxy, or one you are already using to correlate across services, survives into these
-logs; otherwise one is generated. It is bound for the life of the request, so every line
-that request produces carries it, down to `check.started` and `fetch.result` in the
-engine. Quote it when reporting a problem and the whole chain is one grep.
+**Every response carries an `X-Request-ID`**, bound for the life of the request, so every
+log line it produces carries it. Send your own and it is kept. Quote it in a bug report
+and the whole chain is one grep.
 
 Secrets (`SMTP_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `API_KEY`) are held as `SecretStr`, masked
 by `product-tracker config`, and stripped from logs by a redaction processor.
@@ -799,13 +796,11 @@ Integration tests need `TEST_DATABASE_URL` pointing at a **throwaway** database 
 migrates it up and tears it down. Store-extraction tests run against saved fixtures, so the
 suite never depends on Amazon or Flipkart being online.
 
-**That last claim is enforced, not assumed.** `tests/netguard.py` blocks every connection
+**That last claim is enforced, not assumed.** `tests/netguard.py` refuses any connection
 that is not to loopback or the test database, and a test that attempts one fails at
-teardown naming the host. Both halves are needed: two unit tests used to fetch a real
-`robots.txt`, tolerate the failure and pass either way, so nothing ever complained.
-Grepping for stubs would not have found them — it shows which files *mention* a stub, not
-whether some path slips out anyway. Set `PRODUCT_TRACKER_ALLOW_NETWORK=1` for the
-deliberate live acceptance pass, where reaching real shops is the point.
+teardown naming the host — blocking alone would leave a tolerant caller passing in
+silence, which is how two tests quietly fetched a real `robots.txt` for months. Set
+`PRODUCT_TRACKER_ALLOW_NETWORK=1` for the live acceptance pass.
 
 ### CI
 
@@ -839,49 +834,36 @@ deliberate live acceptance pass, where reaching real shops is the point.
 
 ## 15. Letting other people in
 
-The stack binds to `127.0.0.1` on purpose, so out of the box nothing outside this machine
-can reach it — not even another device on the same wifi. Two things have to happen before
-anyone else can use it, and the order matters.
+The stack binds to `127.0.0.1`, so nothing outside this machine can reach it — not even
+another device on the same wifi. Two steps, and the order matters.
 
-**1. Switch authentication on. Do this first.** With `API_KEY` unset and no per-account
-keys issued, `auth_enabled` is false and the API answers everything: it is protected by
-being unreachable, not by being closed. Issue a key per person, which flips authentication
-on by itself:
+**1. Switch authentication on first.** With `API_KEY` unset and no per-account keys, the
+API answers everything: it is protected by being unreachable, not by being closed. Issuing
+a key per person flips authentication on by itself, and scopes each account's watchlist,
+alerts and entries to it.
 
 ```powershell
-product-tracker users add alice@example.com    # prints her key once
-product-tracker users rotate-key alice@example.com   # if she loses it
+product-tracker users add alice@example.com          # prints her key once
+product-tracker users rotate-key alice@example.com   # revokes and reissues
 ```
 
-Each account's watchlist, entries, groups and alerts are scoped to it, so nobody sees
-anyone else's data, and revoking one person is one command that leaves the others alone.
-Also set `API_ALLOW_ANONYMOUS_READS=false`: issuing a key already closes reads as a side
-effect, and saying it explicitly is worth the line.
+Set `API_ALLOW_ANONYMOUS_READS=false` too, so the intent survives someone later deciding
+the side effect was accidental.
 
-**2. Then expose it.** A Cloudflare quick tunnel needs no account and no card:
+**2. Then expose it.** A Cloudflare quick tunnel needs no account:
 
 ```powershell
 cloudflared tunnel --url http://127.0.0.1:8000
 ```
 
-It prints a `https://<words>.trycloudflare.com` URL that forwards to the API. Only port
-8000 is forwarded, so PostgreSQL stays unreachable.
+Only port 8000 is forwarded, so PostgreSQL stays unreachable. Check the lock before
+handing the link out — `/api/v1/products` must answer `401` without a key and `200` with
+one. `/ui`, `/health` and `/openapi.json` stay open by design: the SPA shell is static and
+shows a sign-in screen.
 
-Verify the lock before handing the link out — a public URL with anonymous reads still on
-hands the whole database to anyone who finds it:
-
-```powershell
-curl -o /dev/null -w "%{http_code}" https://<your-url>/api/v1/products          # expect 401
-curl -o /dev/null -w "%{http_code}" -H "X-API-Key: <key>" https://<your-url>/api/v1/products  # expect 200
-```
-
-`/ui`, `/health` and `/openapi.json` stay open by design: the SPA shell is static and
-shows a sign-in screen, and a probe that needs a credential is not much of a probe.
-
-**Two limits worth saying plainly.** A quick tunnel lives only as long as the process and
-the laptop — close either and the link dies. And the URL is regenerated every time, so it
-is fine for a trial and useless as an address you give people once. A named tunnel on a
-domain you own fixes both, and needs a Cloudflare account.
+The link lives only as long as the process and the laptop, and the hostname is regenerated
+each restart — fine for a trial, useless as a permanent address. A named tunnel on a domain
+you own fixes both and needs an account.
 
 ## 16. Docker setup
 
@@ -957,26 +939,16 @@ Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
   hashed at rest, secrets as `SecretStr` and stripped from logs, request-size and rate
   limits, no CAPTCHA or anti-bot evasion anywhere.
 
-  On that first point: the guard used to check the *final* URL after `httpx` had followed
-  the chain, which refused the answer but had already asked the question — a 302 to
-  `169.254.169.254` was fetched and then discarded. For a metadata endpoint or an internal
-  admin route, sending the request is the attack. Both fetch paths now check each hop
-  before it goes out: plain HTTP through an httpx request hook, the browser through a
-  Playwright route guard that aborts the navigation. `tests/unit/test_redirects.py`
-  asserts the internal request is never *made*, not merely never returned.
-- **Acceptance against real shops** — the full A–K pass runs against live Amazon and
-  Flipkart pages, not fixtures. Two of its steps ask for a price change and an
-  availability transition *observed*, which nobody can force on demand, so they were left
-  to happen rather than staged. Both have:
-
-  ```
-  python scripts/observed.py
-  ```
-
-  It reports what the database actually recorded, with dates and amounts, and exits 0 once
-  both have been seen — so it can gate a release instead of being something somebody
-  remembers to check. Transitions out of `unknown` are excluded, for the same reason the
-  alert engine excludes them: we never saw it leave.
+  Each redirect hop is checked *before* it is dialled — an httpx request hook on the plain
+  path, a Playwright route guard on the browser one. Checking only the final URL would
+  refuse the answer after already asking the question, and for a metadata endpoint the
+  request is the attack. `tests/unit/test_redirects.py` asserts the internal request is
+  never made, not merely never returned.
+- **Acceptance against real shops** — the A–K pass runs against live Amazon and Flipkart
+  pages, not fixtures. Two steps need a shop to move its price or stock while we watch,
+  which nobody can force, so they were left to happen. Both have:
+  `python scripts/observed.py` prints what was recorded, with dates and amounts, and
+  exits 0 once both have been seen.
 - **Performance review** — [`docs/performance.md`](docs/performance.md). It found one
   real N+1 (a page of Product Entries cost 85 queries; now 6) and documents the scaling
   boundaries that remain, with the numbers they were measured at.
