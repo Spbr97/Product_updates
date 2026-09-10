@@ -11,7 +11,7 @@ adding a module, not editing the tracking engine.
 
 > **Status: all 7 phases complete.** Add products by URL or find them by name, a
 > background worker checks them on their own interval, records history, and alerts
-> you — through an authenticated REST API, the CLI, or the web UI. 1,488 tests,
+> you — through an authenticated REST API, the CLI, or the web UI. 1,535 tests,
 > `ruff` and `mypy` clean, migrations reversible, and a
 > [performance review](docs/performance.md) with measured numbers.
 
@@ -944,9 +944,11 @@ docker build -f docker/Dockerfile `
 
 Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
 
-- **Test coverage** — 1,488 Python tests (unit, integration against a real PostgreSQL, and
+- **Test coverage** — 1,535 Python tests (unit, integration against a real PostgreSQL, and
   the API surface) plus 56 Vitest tests for the UI. CI fails the build if the
-  database-backed tests are silently skipped.
+  database-backed tests are silently skipped, and the suite is blocked from reaching
+  the internet at the socket, so "no live retailer in CI" is enforced rather than
+  believed.
 - **Docker** — multi-stage build (Node builds the SPA, and never enters the runtime
   image), non-root user, healthchecks, `migrate` as a separate one-shot service.
 - **Docs** — this README, [`docs/architecture.md`](docs/architecture.md), and
@@ -962,6 +964,19 @@ Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
   before it goes out: plain HTTP through an httpx request hook, the browser through a
   Playwright route guard that aborts the navigation. `tests/unit/test_redirects.py`
   asserts the internal request is never *made*, not merely never returned.
+- **Acceptance against real shops** — the full A–K pass runs against live Amazon and
+  Flipkart pages, not fixtures. Two of its steps ask for a price change and an
+  availability transition *observed*, which nobody can force on demand, so they were left
+  to happen rather than staged. Both have:
+
+  ```
+  python scripts/observed.py
+  ```
+
+  It reports what the database actually recorded, with dates and amounts, and exits 0 once
+  both have been seen — so it can gate a release instead of being something somebody
+  remembers to check. Transitions out of `unknown` are excluded, for the same reason the
+  alert engine excludes them: we never saw it leave.
 - **Performance review** — [`docs/performance.md`](docs/performance.md). It found one
   real N+1 (a page of Product Entries cost 85 queries; now 6) and documents the scaling
   boundaries that remain, with the numbers they were measured at.
