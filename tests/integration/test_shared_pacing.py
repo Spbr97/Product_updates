@@ -14,7 +14,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Iterator
-from itertools import pairwise
+from datetime import datetime
 
 import pytest
 from sqlalchemy import text
@@ -37,6 +37,41 @@ def _clean_pacing(db_env: None) -> Iterator[None]:
     wipe()
     yield
     wipe()
+
+
+def read_slot() -> datetime:
+    """The shared row's next free slot, in the database's own clock."""
+    from product_tracker.db.session import get_engine
+
+    with get_engine().begin() as connection:
+        return connection.execute(
+            text("SELECT next_allowed_at FROM store_pacing WHERE host = :h"), {"h": HOST}
+        ).scalar_one()
+
+
+def seed_slot(*, seconds_ahead: int = 60) -> datetime:
+    """Create the row with its next slot already well into the future.
+
+    That is what makes the advance exact. ``_CLAIM_SLOT`` adds its gap to
+    ``greatest(now(), next_allowed_at)``, so a slot in the past would make the first
+    claim add "the gap plus however long the test took to get going" -- the same clock
+    dependence this test is trying to escape. With the slot ahead of now, every claim
+    adds precisely one gap.
+    """
+    from product_tracker.db.session import get_engine
+
+    with get_engine().begin() as connection:
+        connection.execute(
+            text("INSERT INTO store_pacing (host) VALUES (:h) ON CONFLICT (host) DO NOTHING"),
+            {"h": HOST},
+        )
+        return connection.execute(
+            text(
+                "UPDATE store_pacing SET next_allowed_at = now() + make_interval(secs => :s) "
+                "WHERE host = :h RETURNING next_allowed_at"
+            ),
+            {"h": HOST, "s": seconds_ahead},
+        ).scalar_one()
 
 
 def build(
@@ -103,22 +138,32 @@ class TestSlotsAreQueued:
 
 class TestConcurrentCallers:
     def test_threads_are_given_distinct_slots(self) -> None:
-        """Ten callers at once get ten different turns, not ten simultaneous ones."""
-        guard = build(interval=0.25)
-        goes: list[float] = []
+        """Ten callers at once consume ten different turns, not ten simultaneous ones.
+
+        Measured entirely in the database's clock, on purpose. Two earlier versions of
+        this test compared the waits the callers were handed, and both were flaky: a wait
+        is a server-side delta, so turning it back into a moment needs a client-side
+        reading taken after the round trip, and the round trip is exactly what varies.
+        On a slow instance -- a native Windows install rather than the container -- the
+        latency spread swallowed a 0.25s gap outright.
+
+        What the guard actually promises is that each caller's claim advances the shared
+        row by one gap. Ten claims must therefore advance it by ten. That is the property
+        the in-memory throttle broke, and unlike a stopwatch it is exact: if two callers
+        raced and both read "free", they would compute from the same base and the row
+        would come out short.
+        """
+        # max_wait raised because the seeded slot is deliberately a minute out; the
+        # refusal path has its own tests and is not what this one is about.
+        guard = build(interval=0.25, max_wait=200.0)
+        before = seed_slot()
+        refusals: list[object] = []
         lock = threading.Lock()
 
         def claim() -> None:
-            wait, refusal = guard._claim(HOST)
-            # When this caller may go, on one shared clock -- not how long it was told to
-            # wait. The raw waits measure thread scheduling as much as pacing: a thread
-            # that reaches `_claim` a tenth of a second after its neighbour is handed a
-            # wait a tenth shorter, and under a loaded `-n auto` run that skew closes a
-            # gap the guard did in fact leave. This failed once in three runs before.
-            go_at = time.monotonic() + wait
-            assert refusal is None
+            _wait, refusal = guard._claim(HOST)
             with lock:
-                goes.append(go_at)
+                refusals.append(refusal)
 
         threads = [threading.Thread(target=claim) for _ in range(10)]
         for thread in threads:
@@ -126,13 +171,41 @@ class TestConcurrentCallers:
         for thread in threads:
             thread.join()
 
-        ordered = sorted(goes)
-        assert len(ordered) == 10
-        # No two callers were told to go at the same moment.
-        for earlier, later in pairwise(ordered):
-            assert later - earlier >= 0.15
-        # And the tenth turn is roughly nine gaps after the first, not none.
-        assert ordered[-1] - ordered[0] == pytest.approx(0.25 * 9, abs=0.5)
+        assert refusals == [None] * 10
+        advanced = (read_slot() - before).total_seconds()
+        assert advanced == pytest.approx(0.25 * 10, abs=0.01)
+
+    def test_the_later_callers_are_actually_told_to_wait(self) -> None:
+        """The coarse half: ten callers cannot all be told to go now. That was the bug --
+        every process believed it was alone.
+
+        The interval is five seconds rather than a quarter of one, and that is the whole
+        trick. A queue only forms while callers arrive faster than the pacing interval;
+        with a short interval on a slow database each claim takes longer than the gap it
+        books, ``greatest(now(), next_allowed_at)`` correctly picks ``now()``, and the
+        waits come back as zeros. Which is right behaviour, and made an earlier version
+        of this test fail for the one reason that is not a bug.
+        """
+        guard = build(interval=5.0, max_wait=1000.0)
+        waits: list[float] = []
+        lock = threading.Lock()
+
+        def claim() -> None:
+            wait, _refusal = guard._claim(HOST)
+            with lock:
+                waits.append(wait)
+
+        threads = [threading.Thread(target=claim) for _ in range(10)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        # Only the first caller may go immediately; every later one is queued behind it.
+        assert sum(1 for w in waits if w > 0) >= 9
+        # And the queue really is cumulative -- the last turn is tens of seconds out, not
+        # one gap. Nothing is slept: the guard's sleeper is a no-op in these tests.
+        assert max(waits) > 20.0
 
 
 class TestRefusingRatherThanQueueing:
