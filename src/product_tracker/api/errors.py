@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DataError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..core.logging import get_logger
@@ -111,6 +112,24 @@ def register_exception_handlers(app: FastAPI) -> None:
             _HTTP_ERROR_TYPES.get(exc.status_code, "http_error"),
             str(exc.detail),
             headers=getattr(exc, "headers", None),
+        )
+
+    @app.exception_handler(DataError)
+    async def _bad_data(_request: Request, _exc: DataError) -> JSONResponse:
+        """Input the database itself refuses to accept is bad input, not a crash.
+
+        Two of these reached the unhandled handler and came back 500: a product id larger
+        than a bigint (`integer out of range`), and a slug carrying a NUL byte
+        (`PostgreSQL text fields cannot contain NUL (0x00) bytes`). Both are somebody
+        sending nonsense, and a 500 says the server broke -- which sends whoever is on
+        call looking for a fault that is not there.
+
+        Handled as a class rather than case by case, because the shapes of "the driver
+        will not accept this value" are not enumerable in advance. The driver's message is
+        not passed on: it carries the SQL and the bound parameters.
+        """
+        return error_response(
+            _HTTP_422, "validation_error", "A value in the request was not acceptable"
         )
 
     @app.exception_handler(Exception)

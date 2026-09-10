@@ -11,6 +11,7 @@ from ..core.config import get_settings
 from ..db.session import session_scope
 from ..domain.enums import CheckStatus
 from ..repositories.products import ProductRepository
+from ..scheduler.claims import claimed
 from ..scheduler.lock import WorkerAlreadyRunningError
 from ..scheduler.runner import WorkerRunner, desired_schedule
 from ..services.check_runner import deliver_pending, run_check
@@ -65,6 +66,11 @@ def check_all(
 
     Sequential and unthrottled -- this is a manual operation, not the scheduler. For
     ongoing checking use ``product-tracker worker``.
+
+    Each product is claimed first, for the same reason the scheduler claims: two of these
+    running at once, or one running beside a worker, would otherwise check every product
+    twice and hit every shop twice as hard. A product already being checked is skipped and
+    reported as such, which is honest -- the check is happening, just not here.
     """
     settings = get_settings()
 
@@ -77,17 +83,23 @@ def check_all(
 
     results = table(f"Checked {len(product_ids)} product(s)", ["Product", "Status", "Price"])
     failures = 0
+    skipped = 0
     # One browser for the whole sweep. Launching Chromium costs about eighteen seconds and
     # a one-shot render pays it per product, so five browser-rendered products went from
     # roughly a hundred seconds to under forty. Safe here precisely because this loop is
     # sequential -- the scheduler's thread pool is why the worker does not do this.
     with browser.session(headless=settings.playwright_headless):
         for product_id in product_ids:
-            # Deliver once at the end rather than after each product, so one slow provider
-            # does not stall the whole run.
-            outcome = run_check(
-                product_id, settings=settings, registry=default_registry(), deliver=False
-            )
+            with claimed(product_id) as granted:
+                if not granted:
+                    skipped += 1
+                    results.add_row(str(product_id), "[dim]already running[/dim]", "")
+                    continue
+                # Deliver once at the end rather than after each product, so one slow
+                # provider does not stall the whole run.
+                outcome = run_check(
+                    product_id, settings=settings, registry=default_registry(), deliver=False
+                )
             if outcome.status is CheckStatus.FAILED:
                 failures += 1
             results.add_row(
@@ -99,6 +111,8 @@ def check_all(
             )
 
     stdout.print(results)
+    if skipped:
+        info(f"{skipped} product(s) were already being checked elsewhere, and were skipped")
     report = deliver_pending(settings)
     if report.sent or report.failed:
         info(f"alerts: {report.sent} sent, {report.failed} failed")

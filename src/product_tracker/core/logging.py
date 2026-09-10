@@ -8,7 +8,9 @@ context, so a single check produces correlated events:
                   -> notification.created -> notification.sent -> check.finished
 
 A redaction processor removes anything that looks like a secret before rendering, so a
-stray ``log.info("...", api_key=...)`` cannot leak.
+stray ``log.info("...", api_key=...)`` cannot leak. It covers the event's own keys, which
+is all it can see -- tracebacks are rendered without frame locals for the same reason,
+since a local variable several frames down is not something a key-name filter can reach.
 """
 
 from __future__ import annotations
@@ -85,7 +87,22 @@ def configure_logging(level: str = "INFO", fmt: str = "json") -> None:
         shared.append(structlog.processors.format_exc_info)
     else:
         renderer = structlog.processors.JSONRenderer()
-        shared.append(structlog.processors.dict_tracebacks)
+        # `dict_tracebacks` with its default transformer renders every frame's *locals*.
+        # That reads as a debugging luxury and is a credential leak: one of those frames
+        # is the ASGI middleware, whose `scope` local holds the raw request headers, so an
+        # unhandled error wrote the caller's `X-API-Key` into the log in full. Found by
+        # sending a product id too large for a bigint and reading what came out.
+        #
+        # Redaction cannot save this. `_redact_secrets` scans the event dict's own keys;
+        # the traceback arrives as an already-rendered blob underneath them, and scrubbing
+        # arbitrary nested frame locals reliably is not a thing worth attempting. Locals
+        # are the whole class of leak -- a password variable, a token, someone's address --
+        # so the fix is not to render them.
+        shared.append(
+            structlog.processors.ExceptionRenderer(
+                structlog.tracebacks.ExceptionDictTransformer(show_locals=False)
+            )
+        )
 
     # The stdlib factory (rather than PrintLogger) is what makes ``add_logger_name`` work
     # and lets our events share one handler with uvicorn, SQLAlchemy, and APScheduler.
