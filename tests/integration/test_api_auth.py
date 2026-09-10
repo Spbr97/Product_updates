@@ -144,6 +144,66 @@ class TestProbesStayOpen:
         assert locked_client.get("/openapi.json").status_code == 200
 
 
+class TestTheWorkerDoesNotGateTheApi:
+    """A dead worker must not take the API down with it.
+
+    The failure-isolation list the project is built against says it in as many words:
+    *worker failure != API failure*. An API that can serve reads and accept new products
+    is doing its job whether or not anything is checking prices, and the health route's
+    own docstring says so -- but nothing asserted it, and "make readiness accurate" is a
+    change somebody makes in good faith. Under Kubernetes it would pull every API pod out
+    of the load balancer because a single worker died.
+    """
+
+    def stop_the_worker(self, seconds_ago: int = 86_400) -> None:
+        """One heartbeat, aged past any staleness limit. That reads as *not running*,
+        which is a stronger case than a fresh install where none has ever reported."""
+        from sqlalchemy import text
+
+        from product_tracker.db.session import session_scope
+        from product_tracker.scheduler import heartbeat
+
+        with session_scope() as session:
+            heartbeat.touch(session, "worker-that-died")
+            session.execute(
+                text(
+                    "UPDATE worker_heartbeats "
+                    "SET last_seen_at = now() - make_interval(secs => :s)"
+                ),
+                {"s": seconds_ago},
+            )
+
+    def test_readiness_is_still_ready(self, open_client: TestClient) -> None:
+        self.stop_the_worker()
+
+        response = open_client.get("/health/ready")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "ready"
+
+    def test_but_the_worker_is_reported_as_unhealthy(self, open_client: TestClient) -> None:
+        """Isolation is not silence. The probe must still say the worker is gone --
+        otherwise the API looks fine and nobody learns prices stopped updating."""
+        self.stop_the_worker()
+
+        dependencies = open_client.get("/health/ready").json()["dependencies"]
+        scheduler = next(d for d in dependencies if d["name"] == "scheduler")
+
+        assert scheduler["healthy"] is False
+        assert "over the" in scheduler["detail"]
+
+    def test_reads_and_writes_still_work(self, open_client: TestClient) -> None:
+        """The part that actually matters to a user."""
+        self.stop_the_worker()
+        respx.get(URL).mock(return_value=httpx.Response(200, html=load("jsonld_in_stock.html")))
+
+        created = open_client.post("/api/v1/products", json={"url": URL})
+        listed = open_client.get("/api/v1/products")
+
+        assert created.status_code == 201
+        assert listed.status_code == 200
+
+
 class TestBodySizeLimit:
     def test_an_oversized_body_is_rejected(self, open_client: TestClient) -> None:
         response = open_client.post(
