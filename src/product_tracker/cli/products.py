@@ -14,6 +14,7 @@ from ..domain.errors import DuplicateError, NotFoundError, ValidationError
 from ..repositories.executions import CheckExecutionRepository
 from ..services.check_runner import run_check
 from ..services.product_service import ProductService
+from ..services.user_service import assert_subscribed
 from ..stores.registry import default_registry
 from ..utils.money import format_money
 from .formatting import ExitCode, error, info, stdout, success, table, warn
@@ -56,7 +57,9 @@ def add(
     success(f"tracking product {product_id} via {store_name}")
     if check_now:
         info("")
-        check(product_id)
+        # The same account that just subscribed, or the follow-up check is refused as
+        # somebody else's listing now that `check` is scoped.
+        check(product_id, user)
 
 
 def list_products(
@@ -203,9 +206,24 @@ def set_interval(
     info("A running worker applies this on its next reconcile; no restart needed.")
 
 
-def check(product_id: Annotated[int, typer.Argument(help="Product ID.")]) -> None:
-    """Check one product now and report what was found."""
+def check(
+    product_id: Annotated[int, typer.Argument(help="Product ID.")],
+    user: UserOption = None,
+) -> None:
+    """Check one product now and report what was found.
+
+    Scoped to the acting account's own listings, like ``show`` and ``pause``. This took no
+    user at all, which made it the one product command that would act on any listing by
+    id -- both a way to read a price you do not watch, and a way to make this deployment
+    fetch from a retailer on demand for someone else's listing. The API route was hardened
+    for exactly that reason; the CLI kept the hole until an acceptance run walked into it.
+
+    Reported as not found rather than forbidden, so ids cannot be enumerated by watching
+    which ones answer differently.
+    """
     try:
+        with session_scope() as session:
+            assert_subscribed(session, acting_user(session, user).id, product_id)
         # Owns both transactions: the check, then delivery of anything it produced.
         outcome = run_check(product_id, settings=get_settings(), registry=default_registry())
     except NotFoundError as exc:

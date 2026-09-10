@@ -156,3 +156,48 @@ class TestCheck:
     def test_check_missing_exits_not_found(self, clean_db: None) -> None:
         result = runner.invoke(app, ["check", "999999"])
         assert result.exit_code == ExitCode.NOT_FOUND
+
+
+class TestCheckIsScopedToItsOwner:
+    """`check` was the one product command that acted on any listing by id.
+
+    Every sibling -- show, pause, resume, remove -- resolves an account and asserts a
+    subscription. `check` called run_check directly, which made it both a way to read a
+    price you do not watch and a way to make this deployment fetch from a retailer on
+    demand for someone else's listing. The API route was hardened for exactly that reason;
+    the CLI kept the hole until a live acceptance run walked into it.
+    """
+
+    def test_another_account_cannot_check_your_listing(self, clean_db: None) -> None:
+        from product_tracker.db.session import session_scope
+        from product_tracker.services import user_service
+
+        stub_ok(URL)
+        runner.invoke(app, ["add", URL])  # tracked by the default account
+        with session_scope() as session:
+            user_service.create_user(session, email="stranger@example.com")
+
+        result = runner.invoke(app, ["check", "1", "--user", "stranger@example.com"])
+
+        # Not found rather than forbidden: a 403 would confirm the id exists.
+        assert result.exit_code == ExitCode.NOT_FOUND
+
+    def test_the_owner_still_can(self, clean_db: None) -> None:
+        stub_ok(URL)
+        runner.invoke(app, ["add", URL])
+        assert runner.invoke(app, ["check", "1"]).exit_code == ExitCode.OK
+
+    def test_adding_as_a_named_user_still_checks(self, clean_db: None) -> None:
+        """Regression: `add` hands the product to `check`, and scoping it meant the
+        follow-up check ran as the wrong account unless the user came with it."""
+        from product_tracker.db.session import session_scope
+        from product_tracker.services import user_service
+
+        with session_scope() as session:
+            user_service.create_user(session, email="owner@example.com")
+        stub_ok(URL)
+
+        result = runner.invoke(app, ["add", URL, "--user", "owner@example.com"])
+
+        assert result.exit_code == ExitCode.OK
+        assert "status" in result.stdout  # the check ran and printed its result table
