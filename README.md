@@ -19,36 +19,27 @@ adding a module, not editing the tracking engine.
 
 ## 1. What this project does
 
-- **Track by URL.** Paste a product link from any supported site. A generic schema.org
-  adapter handles sites that publish structured data; named adapters add tuned extraction.
+- **Track by URL.** A generic schema.org adapter handles sites publishing structured data;
+  named adapters add tuned extraction.
 - **Price and availability, separately.** A failure to read a price is recorded as
-  "unknown", never as "out of stock". Extraction failures and stock states are different
-  facts and are stored as such.
-- **Full history.** Every meaningful price observation is appended, never overwritten.
-  "Meaningful" means the first observation, a changed price, or a currency switch —
-  repeating an unchanged number would grow the series without adding information. Every
-  check is still recorded in `check_executions` either way. Availability is stored as one
-  row per *transition*. Answers current/lowest/highest/average, when the low occurred, and
-  change over time.
-- **Configurable alerts.** Rules ("price dropped", "below ₹69,999", "back in stock") are
-  rows, not code branches. Six conditions ship; adding one is an evaluator function.
-  Notifications are deduplicated by a unique key in the database, so the same alert reaches
-  you once however many times it is observed or retried. Recording and delivery are separate
-  transactions, so a slow provider never holds a check open.
-- **Runs itself.** A worker process checks products on a per-product interval, retries
-  transient failures, throttles requests per store, and records every attempt.
-- **One product, both shops.** A *Product Entry* is the thing you actually mean by "the
-  Galaxy S25 I'm watching": one logical product owning one Amazon listing and one Flipkart
-  listing. Each shop is tracked, priced and failed independently; the entry keeps its id
-  through price changes, renames and URL swaps. There is a web form for it at `/ui`.
-- **Find by name.** `product-tracker search "Galaxy S25"` (or `POST /api/v1/search`) asks
-  every shop at once and returns ranked candidates, so nobody has to paste six links.
-  Search is for **one named product**, not a category — see below.
-- **Declare what you track.** `tracking.yaml` says which products and listings this
-  installation watches, and `product-tracker init` applies it. Idempotent, so it can be
-  committed and re-applied on a new machine. See [§8a](#8a-declaring-what-you-track).
-- **Two interfaces.** A Typer CLI for humans and a versioned FastAPI for a future web or
-  mobile frontend.
+  `unknown`, never as out of stock. They are different facts and are stored as such.
+- **Full history.** A price observation is appended on the first reading, a change, or a
+  currency switch — every check is recorded in `check_executions` either way. Availability
+  is one row per *transition*. Answers current, lowest, highest, average and when the low
+  occurred.
+- **Configurable alerts.** Six conditions ship as rows, not code branches. Notifications
+  are deduplicated by a unique database key, and recording is a separate transaction from
+  delivery, so a slow provider never holds a check open.
+- **Runs itself.** A worker checks each product on its own interval, retries transient
+  failures, throttles per store, and records every attempt.
+- **One product, both shops.** A *Product Entry* owns one Amazon and one Flipkart listing,
+  each tracked and failed independently; the entry keeps its id through price changes,
+  renames and URL swaps. Web form at `/ui`.
+- **Find by name.** `product-tracker search "Galaxy S25"` asks every shop at once and
+  ranks the candidates. One named product, not a category — see below.
+- **Declare what you track.** `tracking.yaml` plus `product-tracker init`, idempotent, so
+  it can be committed and re-applied. See [§8a](#8a-declaring-what-you-track).
+- **Two interfaces.** A Typer CLI and a versioned FastAPI.
 
 **What it does not do:** bypass CAPTCHAs, authentication, or any access control. When a
 store cannot be read, the check is recorded as failed with the reason. It never invents a
@@ -67,29 +58,19 @@ with no browser:
 | BigBasket | ✅ ₹82,900 · availability *unknown* | labelled text |
 | Croma | ❌ `blocked` (HTTP 403) | — |
 
-Notes on the two that are not a plain ✅:
-
-- **BigBasket publishes no availability signal at all** — no JSON-LD, no OpenGraph, and the
-  only hint is an "Add to Basket" string, which is present on out-of-stock pages too. The
-  honest answer is `unknown`, so that is what is recorded.
-- **Croma blocks automated access at the edge.** It returns a 326-byte "Access Denied" page
-  to a real headless Chromium as well as to plain HTTP, so this is not a user-agent filter
-  and the browser fallback does not help. Getting past it would require IP rotation or
-  fingerprint spoofing; this project does not do that. Croma is recorded as `blocked` and
-  its circuit breaker backs it off.
+- **BigBasket** publishes no availability signal at all, so `unknown` is the honest
+  answer and that is what is recorded.
+- **Croma** blocks at the edge — a real headless Chromium gets the same 403 — so the
+  browser fallback does not help. Getting past it would need IP rotation or fingerprint
+  spoofing; this project does not do that.
 
 ### Finding a product
 
-Each shop is reached by whichever route it permits. Three exist, in increasing cost, and a
-search tries them in order until one answers:
-
-1. **Their search page** — fastest, and carries prices. Only where robots.txt allows it.
-2. **Their catalogue (sitemap)** — a static file they publish for crawlers. Carries URLs
-   but no prices, so the best few hits get their product page fetched to fill them in
-   (`SEARCH_PRICE_LOOKUPS`, default 5).
-3. **Their browse listings** — the category and brand pages they publish for crawlers.
-   These carry prices, but are ordered by the shop's idea of popularity, so the search
-   pages through them until the model appears and stops as soon as it does.
+Each shop is reached by whichever route it permits, tried in increasing cost: their
+**search page** (fastest, carries prices, only where robots.txt allows), their
+**catalogue** (URLs but no prices, so the best few get a product fetch —
+`SEARCH_PRICE_LOOKUPS`, default 5), then their **browse listings** (priced, but ordered by
+the shop, so the search pages through until the model appears).
 
 Where each shop stands, verified 2026-09-02:
 
@@ -110,26 +91,21 @@ Where each shop stands, verified 2026-09-02:
 `"Samsung Galaxy S25"` finds it and `"Galaxy S25"` gets a message asking for the brand
 rather than four wasted requests. Every other shop is happy with either.
 
-**Excluding variants and accessories.** A search *labels* near-matches rather than
-dropping them — an iPhone 17 Pro comes back flagged and ranked below the exact match,
-because only you know whether that is close enough. When it is not, say so:
+**Near-matches are labelled, not dropped** — an iPhone 17 Pro comes back flagged and
+ranked below the exact match, because only you know whether that is close enough. Drop
+them explicitly when it is not:
 
 ```powershell
 product-tracker search "iPhone 17" --exclude pro,air,refurbished,case
 ```
 
-Matched as whole words, case-insensitively, so `case` drops "Silicone Case" without
-dropping "Showcase". `POST /api/v1/search` takes the same list as `exclude`, and
-`tracking.yaml` carries it per product as `excluded_terms`. The two mechanisms are kept
-apart on purpose: a qualifier is a judgement left to you, an excluded word is one already
-made.
+Whole words, case-insensitive, so `case` drops "Silicone Case" and keeps "Showcase". A
+qualifier is a judgement left to you; an excluded word is one already made.
 
-**Search only accepts a named product.** "Galaxy S25" works; "phone", "earbuds" and
-"best power bank" are refused with a message saying why. This is not fussiness: a shop's
-catalogue and browse pages are ordered by the shop, not by relevance to a question we
-asked, so a category query can only return whatever they happen to feature. Measured —
-on Flipkart's Samsung phone listing the Galaxy S25 was not on page one; it was on page
-two, behind older models. To track something you found by browsing, paste its link.
+**Only a named product.** "phone" and "best power bank" are refused with a reason: a
+shop's catalogue is ordered by the shop, not by relevance to a question we asked, so a
+category query returns whatever they happen to feature. To track something you found by
+browsing, paste its link.
 
 ### Product Entries, and how they differ from groups
 
@@ -769,37 +745,22 @@ day is delivered once, the same transition next week alerts again, and a rule's
 
 ## 14. Running tests
 
-**Use the IPv4 literal in `TEST_DATABASE_URL`, not `localhost`.** The compose file
-publishes Postgres on the IPv4 loopback only, while `localhost` resolves to IPv6 `::1`
-first — so every connection waits ~10s for that attempt to time out before falling back.
-Measured on Windows: ten connections took **101s** via `localhost` and **0.5s** via
-`127.0.0.1`, which turned a four-minute suite into a twenty-minute one.
-
-**Run it in parallel.** `pytest -n auto` gives each worker its own database
-(`tracker_test_gw0`, `gw1`, …), created on demand and reused between runs. On 8 workers
-the suite is **50 seconds** instead of 235.
-
 ```powershell
-pytest -q -n auto        # the whole suite, parallel
+pytest -q -n auto        # the whole suite, parallel — 8 workers, ~40s
 pytest -q                # serial, same result
-```
-
-
-```powershell
-pytest                       # unit tests always; integration tests skip without a database
-pytest -m "not db"           # unit only, explicitly
+pytest -m "not db"       # unit only; integration skips without a database
 ruff check .
 mypy
 ```
 
-Integration tests need `TEST_DATABASE_URL` pointing at a **throwaway** database — the suite
-migrates it up and tears it down. Store-extraction tests run against saved fixtures, so the
-suite never depends on Amazon or Flipkart being online.
+**Use the IPv4 literal in `TEST_DATABASE_URL`, not `localhost`.** Postgres is published on
+the IPv4 loopback only, and `localhost` resolves to `::1` first, so every connection waits
+out a ~10s timeout — measured, that turned a four-minute suite into a twenty-minute one.
+Point it at a **throwaway** database: the suite migrates it up and tears it down.
 
-**That last claim is enforced, not assumed.** `tests/netguard.py` refuses any connection
-that is not to loopback or the test database, and a test that attempts one fails at
-teardown naming the host — blocking alone would leave a tolerant caller passing in
-silence, which is how two tests quietly fetched a real `robots.txt` for months. Set
+Store-extraction tests run against saved fixtures, and that is enforced rather than
+assumed — `tests/netguard.py` refuses any connection that is not to loopback or the test
+database, and a test that attempts one fails at teardown naming the host. Set
 `PRODUCT_TRACKER_ALLOW_NETWORK=1` for the live acceptance pass.
 
 ### CI
@@ -926,29 +887,16 @@ docker build -f docker/Dockerfile `
 
 Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
 
-- **Test coverage** — 1,535 Python tests (unit, integration against a real PostgreSQL, and
-  the API surface) plus 56 Vitest tests for the UI. CI fails the build if the
-  database-backed tests are silently skipped, and the suite is blocked from reaching
-  the internet at the socket, so "no live retailer in CI" is enforced rather than
-  believed.
-- **Docker** — multi-stage build (Node builds the SPA, and never enters the runtime
-  image), non-root user, healthchecks, `migrate` as a separate one-shot service.
-- **Docs** — this README, [`docs/architecture.md`](docs/architecture.md), and
-  [`docs/performance.md`](docs/performance.md).
-- **Security review** — SSRF guard validated per redirect hop, per-user API keys
-  hashed at rest, secrets as `SecretStr` and stripped from logs, request-size and rate
-  limits, no CAPTCHA or anti-bot evasion anywhere.
-
-  Each redirect hop is checked *before* it is dialled — an httpx request hook on the plain
-  path, a Playwright route guard on the browser one. Checking only the final URL would
-  refuse the answer after already asking the question, and for a metadata endpoint the
-  request is the attack. `tests/unit/test_redirects.py` asserts the internal request is
-  never made, not merely never returned.
-- **Acceptance against real shops** — the A–K pass runs against live Amazon and Flipkart
-  pages, not fixtures. Two steps need a shop to move its price or stock while we watch,
-  which nobody can force, so they were left to happen. Both have:
-  `python scripts/observed.py` prints what was recorded, with dates and amounts, and
-  exits 0 once both have been seen.
-- **Performance review** — [`docs/performance.md`](docs/performance.md). It found one
-  real N+1 (a page of Product Entries cost 85 queries; now 6) and documents the scaling
-  boundaries that remain, with the numbers they were measured at.
+- **Tests** — 1,535 Python plus 56 Vitest. CI fails the build if the database-backed ones
+  are silently skipped, and the suite is blocked from the internet at the socket, so "no
+  live retailer in CI" is enforced rather than believed.
+- **Security** — SSRF validated on *every* redirect hop before it is dialled, not on the
+  final URL after the fact; per-user keys hashed at rest; secrets as `SecretStr` and
+  stripped from logs; request-size and rate limits; no CAPTCHA or evasion anywhere.
+- **Acceptance** — the A–K pass runs against live shops. Two steps need a shop to move its
+  price or stock, which nobody can force, so they were left to happen; both have.
+  `python scripts/observed.py` prints what was recorded and exits 0 once both are seen.
+- **Docker** — multi-stage (Node builds the SPA and never enters the runtime image),
+  non-root, healthchecks, `migrate` as a one-shot service.
+- **Performance** — [`docs/performance.md`](docs/performance.md) found one real N+1 (a page
+  of Product Entries cost 85 queries; now 6) and records the scaling boundaries that remain.
