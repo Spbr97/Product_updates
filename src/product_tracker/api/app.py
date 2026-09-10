@@ -20,7 +20,7 @@ from ..core.logging import configure_logging, get_logger
 from ..db.session import get_engine
 from .deps import RequireRead
 from .errors import register_exception_handlers
-from .middleware import BodySizeLimitMiddleware
+from .middleware import BodySizeLimitMiddleware, RequestIdMiddleware
 from .ratelimit import (
     Limiter,
     RateLimitMiddleware,
@@ -117,6 +117,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
     )
     app.add_middleware(RateLimitMiddleware, limiter=limiter)
+    # Outermost of all, so even a rejected request -- rate limited, oversized -- is logged
+    # under an id. A request that was refused is exactly the one someone asks about.
+    app.add_middleware(RequestIdMiddleware)
 
     from .routers import health  # Imported here to keep module import side-effect free.
 

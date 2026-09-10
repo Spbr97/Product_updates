@@ -286,6 +286,12 @@ most:
 | `BLOCK_PRIVATE_ADDRESSES` | `true` | SSRF guard. Rejects URLs resolving to private/loopback ranges — on the URL you give it and again on **every hop of a redirect chain**, before each is dialled. |
 | `NOTIFY_DEFAULT_PROVIDERS` | `console` | Comma-separated provider slugs. |
 
+Every response carries an `X-Request-ID`. Send your own and it is kept — so an id from a
+proxy, or one you are already using to correlate across services, survives into these
+logs; otherwise one is generated. It is bound for the life of the request, so every line
+that request produces carries it, down to `check.started` and `fetch.result` in the
+engine. Quote it when reporting a problem and the whole chain is one grep.
+
 Secrets (`SMTP_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `API_KEY`) are held as `SecretStr`, masked
 by `product-tracker config`, and stripped from logs by a redaction processor.
 

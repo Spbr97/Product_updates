@@ -199,6 +199,19 @@ row stays the thing the engine checks and the thing history hangs off; the listi
 what belongs to one user's entry. Its foreign key to `products` is `RESTRICT`, so removing
 a listing can never cascade into a shared product's observations.
 
+**Entries are forward-only: nothing was backfilled.** A product added the old way, with
+`product-tracker add <URL>`, stays a standalone tracked listing and is never folded into
+an entry by the system. The migration could have guessed — group the products whose names
+look alike, call each group an entry — and that guess is exactly the thing this project
+refuses to make elsewhere. Two shops' names for one phone often differ by more than two
+different phones do, so name similarity is not evidence of identity; a wrong grouping
+would merge two products' price histories into one series and there is no undo for that.
+The safe options are to guess or to leave it alone, and leaving it alone costs a user one
+re-add while a bad merge costs them their history. Migration 0011 therefore creates the
+tables and touches no existing row. (Contrast migration 0007, which *did* backfill: every
+existing listing onto a default user. That grouping was not a guess — there was exactly
+one user — which is what made it safe.)
+
 The partial unique index `(product_entry_id, store_slug) WHERE deactivated_at IS NULL`
 allows at most one live listing per shop per entry while letting a deactivated one sit
 beside its replacement — which is exactly what re-pointing a URL leaves behind.
