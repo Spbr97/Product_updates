@@ -837,7 +837,53 @@ deliberate live acceptance pass, where reaching real shops is the point.
   worker wrote a heartbeat, and verifies SIGTERM produces exit code 0 rather than a kill.
   That last one cannot be tested on Windows.
 
-## 15. Docker setup
+## 15. Letting other people in
+
+The stack binds to `127.0.0.1` on purpose, so out of the box nothing outside this machine
+can reach it — not even another device on the same wifi. Two things have to happen before
+anyone else can use it, and the order matters.
+
+**1. Switch authentication on. Do this first.** With `API_KEY` unset and no per-account
+keys issued, `auth_enabled` is false and the API answers everything: it is protected by
+being unreachable, not by being closed. Issue a key per person, which flips authentication
+on by itself:
+
+```powershell
+product-tracker users add alice@example.com    # prints her key once
+product-tracker users rotate-key alice@example.com   # if she loses it
+```
+
+Each account's watchlist, entries, groups and alerts are scoped to it, so nobody sees
+anyone else's data, and revoking one person is one command that leaves the others alone.
+Also set `API_ALLOW_ANONYMOUS_READS=false`: issuing a key already closes reads as a side
+effect, and saying it explicitly is worth the line.
+
+**2. Then expose it.** A Cloudflare quick tunnel needs no account and no card:
+
+```powershell
+cloudflared tunnel --url http://127.0.0.1:8000
+```
+
+It prints a `https://<words>.trycloudflare.com` URL that forwards to the API. Only port
+8000 is forwarded, so PostgreSQL stays unreachable.
+
+Verify the lock before handing the link out — a public URL with anonymous reads still on
+hands the whole database to anyone who finds it:
+
+```powershell
+curl -o /dev/null -w "%{http_code}" https://<your-url>/api/v1/products          # expect 401
+curl -o /dev/null -w "%{http_code}" -H "X-API-Key: <key>" https://<your-url>/api/v1/products  # expect 200
+```
+
+`/ui`, `/health` and `/openapi.json` stay open by design: the SPA shell is static and
+shows a sign-in screen, and a probe that needs a credential is not much of a probe.
+
+**Two limits worth saying plainly.** A quick tunnel lives only as long as the process and
+the laptop — close either and the link dies. And the URL is regenerated every time, so it
+is fine for a trial and useless as an address you give people once. A named tunnel on a
+domain you own fixes both, and needs a Cloudflare account.
+
+## 16. Docker setup
 
 ```powershell
 docker compose -f docker/docker-compose.yml up -d db
@@ -855,7 +901,7 @@ docker build -f docker/Dockerfile `
   --build-arg EXTRAS=browser -t product-tracker:browser .
 ```
 
-## 16. Troubleshooting
+## 17. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|

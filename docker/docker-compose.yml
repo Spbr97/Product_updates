@@ -24,6 +24,12 @@ x-app: &app
     # image to enable it; see docker/Dockerfile.
     PLAYWRIGHT_ENABLED: ${PLAYWRIGHT_ENABLED:-false}
     API_KEY: ${API_KEY:-}
+    # Reads are open by default, which is right for a stack bound to loopback. The
+    # moment this is reachable from anywhere else -- a tunnel, a LAN bind -- an
+    # unidentified caller cannot be scoped to anyone's data, so it must be off.
+    # Note that issuing any per-account key already switches authentication on; this
+    # closes reads as well, and does so explicitly rather than as a side effect.
+    API_ALLOW_ANONYMOUS_READS: ${API_ALLOW_ANONYMOUS_READS:-true}
     NOTIFY_DEFAULT_PROVIDERS: ${NOTIFY_DEFAULT_PROVIDERS:-console}
   depends_on:
     db:

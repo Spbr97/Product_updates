@@ -9,6 +9,8 @@ dist/
 .venv/
 venv/
 .env
+.env.hosting
+.env.hosting.keys
 
 # Tooling caches
 .pytest_cache/
