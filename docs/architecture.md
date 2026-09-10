@@ -153,8 +153,19 @@ any process can read a direct answer to "is a worker running?". Inferring it fro
 jobs — the earlier approach — could not tell "nothing is running" from "a worker is running
 but wedged mid-check", and cried wolf whenever a check legitimately ran long.
 
-Two workers appear as two rows, and `status` warns: they have no cross-process locking, so
-every job would run twice.
+Two workers appear as two rows, and `status` warns when several are running unexpectedly.
+
+Running several *deliberately* is supported now. The exclusivity moved down a level: rather
+than one worker holding an advisory lock for the whole process, each check is claimed in
+the statement that tests it (`scheduler/claims.py`), so two workers firing the same product
+means one performs the check and the other steps aside. `ALLOW_MULTIPLE_WORKERS` lifts the
+single-worker refusal; the refusal is still the default, because a surprise second worker
+is more often an accident than a decision.
+
+The claim is a lease rather than a lock, and that difference is the whole design. An
+advisory lock is released by the connection that dies holding it; a row is not. So a claim
+older than `CHECK_CLAIM_LEASE_SECONDS` is claimable again, which is what stops one
+`kill -9` stalling a product for ever.
 
 ### Scheduling hides behind an interface
 

@@ -140,10 +140,21 @@ class WorkerRunner:
     def run(self) -> None:
         """Start the scheduler and block until stopped. Handles SIGINT and SIGTERM.
 
-        Takes an advisory lock first: a second worker against the same database would run
-        every job a second time, and refusing loudly is better than doubling silently.
-        Raises ``WorkerAlreadyRunningError`` if another worker holds it.
+        Takes an advisory lock first, so a second worker refuses to start rather than
+        doubling every check silently. Raises ``WorkerAlreadyRunningError`` if another
+        worker holds it.
+
+        ``ALLOW_MULTIPLE_WORKERS`` lifts that refusal. It is safe now because the
+        exclusivity moved down a level: each check is claimed before it runs, so two
+        workers firing the same product means one performs it and the other steps aside.
+        The lock is still the default, because one worker is the right shape for a local
+        install and a surprise second one is more often an accident -- a stray terminal, a
+        systemd unit beside a container -- than a decision.
         """
+        if self.settings.allow_multiple_workers:
+            log.info("worker.multiple_allowed", worker_id=self.worker_id)
+            self._run_locked()
+            return
         with self.lock:
             self._run_locked()
 

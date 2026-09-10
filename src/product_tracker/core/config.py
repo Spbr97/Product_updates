@@ -68,6 +68,15 @@ class Settings(BaseSettings):
     check_interval_seconds: int = Field(default=3600, ge=60, le=86_400 * 7)
     reconcile_interval_seconds: int = Field(default=60, ge=10, le=3600)
 
+    #: Let more than one worker run against this database. Off by default: one worker is
+    #: the right shape for a local install, and refusing a second loudly beats discovering
+    #: it from duplicated rows. On, each check is claimed before it runs, so several
+    #: workers give failover and rough load sharing without ever checking a product twice.
+    allow_multiple_workers: bool = False
+    #: How long a claimed check stands before another worker may take it over. Above the
+    #: worst honest case, because reclaiming a slow check means running it twice.
+    check_claim_lease_seconds: int = Field(default=900, ge=60, le=86_400)
+
     # --- Outbound HTTP ----------------------------------------------------------
     http_timeout_seconds: int = Field(default=25, ge=1, le=120)
     http_max_retries: int = Field(default=3, ge=0, le=10)

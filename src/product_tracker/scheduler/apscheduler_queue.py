@@ -158,7 +158,18 @@ def _run_check(product_id: int) -> None:
 
     Must be importable by name: APScheduler pickles a reference to the function into the
     job store, so a bound method or a closure could not survive a restart.
+
+    The claim is what makes running several workers safe. Each holds its own copy of the
+    schedule, so two can fire the same product at the same instant; whichever claims it
+    performs the check and the other steps aside. Without this, two workers meant every
+    product checked twice and every shop hit twice as hard -- which is why a second worker
+    used to be refused outright.
     """
     from ..workers.check_worker import run_check
+    from .claims import claimed
 
-    run_check(product_id)
+    with claimed(product_id) as granted:
+        if not granted:
+            log.info("check.claimed_elsewhere", product_id=product_id)
+            return
+        run_check(product_id)
