@@ -11,7 +11,7 @@ adding a module, not editing the tracking engine.
 
 > **Status: all 7 phases complete.** Add products by URL or find them by name, a
 > background worker checks them on their own interval, records history, and alerts
-> you — through an authenticated REST API, the CLI, or the web UI. 1,459 tests,
+> you — through an authenticated REST API, the CLI, or the web UI. 1,470 tests,
 > `ruff` and `mypy` clean, migrations reversible, and a
 > [performance review](docs/performance.md) with measured numbers.
 
@@ -278,6 +278,7 @@ most:
 | `API_MAX_REQUEST_BYTES` | `64000` | Bodies over this are rejected with 413. |
 | `API_RATE_LIMIT_PER_MINUTE` / `API_RATE_LIMIT_BURST` | `60` / `20` | State-changing requests per client. Reads and health probes are exempt. |
 | `NOTIFICATION_DEDUPE_WINDOW_SECONDS` | `86400` | How long the same alert is suppressed. Shorten for volatile prices. |
+| `API_SHARED_RATE_LIMIT` | `true` | Keep the per-client rate limit in PostgreSQL so every API process shares one ceiling. In memory the configured limit is really the limit × the process count. |
 | `NOTIFICATION_DIGEST_MINUTES` | `0` | Batch alerts into one message. `0` sends each immediately. Above zero, alerts wait until the oldest is this old, then go out as one summary — thirty products cost one notification a period, not thirty. |
 | `BLOCK_PRIVATE_ADDRESSES` | `true` | SSRF guard. Rejects URLs resolving to private/loopback ranges. |
 | `NOTIFY_DEFAULT_PROVIDERS` | `console` | Comma-separated provider slugs. |
@@ -874,7 +875,7 @@ docker build -f docker/Dockerfile `
 
 Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
 
-- **Test coverage** — 1,459 Python tests (unit, integration against a real PostgreSQL, and
+- **Test coverage** — 1,470 Python tests (unit, integration against a real PostgreSQL, and
   the API surface) plus 56 Vitest tests for the UI. CI fails the build if the
   database-backed tests are silently skipped.
 - **Docker** — multi-stage build (Node builds the SPA, and never enters the runtime

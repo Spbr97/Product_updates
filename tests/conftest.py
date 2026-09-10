@@ -219,6 +219,12 @@ def db_env(migrated_database: str, monkeypatch: pytest.MonkeyPatch) -> None:
     # in which case a failed HTTP fetch would fall back to it and spend ~12s trying to
     # start Chromium. Browser behaviour is covered by stubbing `stores.browser.render`.
     monkeypatch.setenv("PLAYWRIGHT_ENABLED", "false")
+    # The rate limiter keeps its buckets in memory for tests. Shared is the production
+    # default and correct there -- one ceiling however many API processes run -- but it
+    # persists between tests, so one module's POSTs spend the next module's burst and
+    # unrelated cases start returning 429. The shared implementation has its own tests,
+    # where that persistence is the thing being asserted rather than a side effect.
+    monkeypatch.setenv("API_SHARED_RATE_LIMIT", "false")
     reset_settings_cache()
     reset_engine_cache()
 

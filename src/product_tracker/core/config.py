@@ -150,6 +150,16 @@ class Settings(BaseSettings):
         le=10_000,
         description="Requests allowed in a burst before the sustained rate applies.",
     )
+    api_shared_rate_limit: bool = Field(
+        default=True,
+        description=(
+            "Keep the per-client rate limit in PostgreSQL so every API process shares one "
+            "ceiling. Off keeps it in memory, which is faster but means the configured "
+            "limit is really the limit times the number of processes -- fine for a single "
+            "local process, wrong the moment the API is scaled. Costs one indexed "
+            "statement per mutating request; reads and health probes never touch it."
+        ),
+    )
     api_max_request_bytes: int = Field(
         default=64_000,
         ge=1_000,

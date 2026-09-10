@@ -21,7 +21,12 @@ from ..db.session import get_engine
 from .deps import RequireRead
 from .errors import register_exception_handlers
 from .middleware import BodySizeLimitMiddleware
-from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
+from .ratelimit import (
+    Limiter,
+    RateLimitMiddleware,
+    SharedTokenBucketLimiter,
+    TokenBucketLimiter,
+)
 from .schemas.common import ErrorResponse
 
 log = get_logger(__name__)
@@ -98,13 +103,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         BodySizeLimitMiddleware, max_bytes=settings.api_max_request_bytes
     )
     # Outermost, so a flood is rejected before anything else does work for it.
-    app.add_middleware(
-        RateLimitMiddleware,
-        limiter=TokenBucketLimiter(
+    # Shared by default: an in-memory limit multiplies by the process count, which is not
+    # a limit. Both satisfy the same protocol, so the middleware does not know which it has.
+    limiter: Limiter = (
+        SharedTokenBucketLimiter(
             rate_per_minute=settings.api_rate_limit_per_minute,
             burst=settings.api_rate_limit_burst,
-        ),
+        )
+        if settings.api_shared_rate_limit
+        else TokenBucketLimiter(
+            rate_per_minute=settings.api_rate_limit_per_minute,
+            burst=settings.api_rate_limit_burst,
+        )
     )
+    app.add_middleware(RateLimitMiddleware, limiter=limiter)
 
     from .routers import health  # Imported here to keep module import side-effect free.
 

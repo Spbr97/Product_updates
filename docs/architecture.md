@@ -221,8 +221,5 @@ and a misbehaving rule or an unreachable provider is logged and recorded, not ra
 
 - **Celery/Redis.** APScheduler with a Postgres job store covers one worker; `JobQueue`
   makes the swap cheap when it is actually needed.
-- **A shared *API* rate limit.** The API's per-client limiter is per-process and
-  in-memory; two API processes each enforce their own. (Per-*store* pacing *is* shared —
-  see `store_pacing` below.)
 - **Anti-bot evasion.** Blocks are recorded and respected. No CAPTCHA solving, no
   fingerprint spoofing, no credential use.
