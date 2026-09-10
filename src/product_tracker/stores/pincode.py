@@ -9,13 +9,27 @@ This module is the one place that knows what a given host can do with a PIN code
 Adapters never read ``ctx.delivery_pincode`` themselves; they call :func:`apply` on the
 way out and :func:`escalate` on the way back, and the per-host answer lives here.
 
-**What this honestly does today.** Every entry in :data:`RULES` is marked ``needs_js`` or
-``location_independent``; not one carries a cookie or a query parameter. That is not an
-oversight. Every Indian pincode flow examined is a session handshake -- Amazon's
-address-change POST with a CSRF token, Flipkart's location API, BigBasket's
-address-bound cookie -- and reproducing one means holding a browser session, which is
-the anti-bot line this project does not cross. So :func:`apply` is a true no-op right
-now, and all of the module's value is in :func:`escalate`.
+**Two routes, and the difference is what the request can do.**
+
+*Statically* -- a plain HTTP fetch -- nothing works. Not one entry in :data:`RULES`
+carries a cookie or a query parameter, and that is not an oversight: every Indian pincode
+flow examined is a session handshake (Amazon's address-change POST with a CSRF token,
+Flipkart's location API, BigBasket's address-bound cookie). So :func:`apply` is a true
+no-op today, and :func:`escalate` reports ``NEEDS_LOCATION`` rather than passing off a
+price from an unstated area.
+
+*With a browser*, the shop's own location control can simply be operated. That was
+written off here as "the anti-bot line this project does not cross", and that was wrong:
+the line is **evasion**, not automation. No stealth, no fingerprint spoofing, no CAPTCHA,
+no credentials -- a real browser clicking the public widget a person clicks, on a project
+that already renders pages with Playwright to read JavaScript shops. Verified against
+Amazon India on 2026-09-10: the header moved from an IP-derived "Bengaluru 562130" to the
+configured "Bengaluru 560037". :class:`BrowserFlow` declares that per host, and
+``browser.py`` runs it after navigation.
+
+A flow is only declared where it has been *seen* to work, and every one must name a
+``confirms`` element, because a widget that is clicked but does not take effect leaves a
+price that looks localised and is not -- worse than the honest ``NEEDS_LOCATION``.
 
 :func:`escalate` covers two failures, and the second is the one that made this module
 necessary:
@@ -44,6 +58,33 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from ..domain.enums import Availability, FetchOutcome
 from ..domain.models import RETRACTS_AVAILABILITY, FetchContext, FetchResult
 from ..utils.urls import host_of
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserFlow:
+    """How to set a delivery area by operating the shop's own location control.
+
+    This is automation, not evasion, and the distinction is the whole reason it is
+    allowed here: no stealth, no fingerprint spoofing, no CAPTCHA, no credentials. A real
+    browser clicks the public widget a person clicks. The project already renders pages
+    with Playwright; typing a PIN code into the box the site provides is the same
+    category of act, and section 18 of the contract forbids the other things by name.
+
+    Declared as selectors rather than code so adding a shop is data. ``confirms`` is what
+    proves it worked -- a flow that silently does nothing is worse than no flow, because
+    the price then looks localised and is not.
+    """
+
+    #: Opens the location panel.
+    open: str
+    #: The PIN code input inside it.
+    field: str
+    #: Submit. Tried in order: these controls change shape between page variants.
+    submit: tuple[str, ...]
+    #: Element whose text should contain the PIN code once it has taken effect.
+    confirms: str
+    #: Reload after applying, because the price on the current DOM is the old area's.
+    reload_after: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +124,9 @@ class PincodeRule:
     #: page says "out of stock" about every product on it. That is a statement about our
     #: missing address, not about the product, and it must never be recorded as stock.
     stock_gated_by_area: bool = False
+    #: How to set the area with a browser, when one is available. ``needs_js`` says a
+    #: static request cannot do it; this says a rendered one can.
+    browser_flow: BrowserFlow | None = None
     #: Why this host is classified the way it is.
     note: str = ""
 
@@ -91,8 +135,20 @@ class PincodeRule:
 RULES: dict[str, PincodeRule] = {
     "amazon.in": PincodeRule(
         needs_js=True,
+        browser_flow=BrowserFlow(
+            open="#glow-ingress-block",
+            field="#GLUXZipUpdateInput",
+            submit=(
+                "#GLUXZipUpdate-announce",
+                "#GLUXZipUpdate input",
+                'input[aria-labelledby="GLUXZipUpdate-announce"]',
+            ),
+            confirms="#glow-ingress-block",
+        ),
         note="Delivery area is set by an address-change POST carrying a CSRF token and "
-        "bound to the session cookie; there is no standalone cookie or parameter.",
+        "bound to the session cookie, so no static cookie or parameter can do it. A "
+        "browser can, through the site's own widget: verified 2026-09-10, the header "
+        "moved from an IP-derived 'Bengaluru 562130' to 'Bengaluru 560037'.",
     ),
     "flipkart.com": PincodeRule(
         needs_js=True,
@@ -141,6 +197,18 @@ RULES: dict[str, PincodeRule] = {
         note="Listed prices are national; delivery area affects shipping, not the price.",
     ),
 }
+
+
+def browser_flow_for(url: str, ctx: FetchContext) -> BrowserFlow | None:
+    """The flow to run for this URL, or None when there is nothing to do.
+
+    None whenever a PIN code is not configured, the host is unknown, or the host has no
+    flow -- so a rendered check of an ordinary shop costs exactly what it did before.
+    """
+    if not ctx.delivery_pincode:
+        return None
+    rule = rule_for(url)
+    return rule.browser_flow if rule else None
 
 
 def rule_for(url: str) -> PincodeRule | None:

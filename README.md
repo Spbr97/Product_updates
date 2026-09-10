@@ -11,7 +11,7 @@ adding a module, not editing the tracking engine.
 
 > **Status: all 7 phases complete.** Add products by URL or find them by name, a
 > background worker checks them on their own interval, records history, and alerts
-> you — through an authenticated REST API, the CLI, or the web UI. 1,482 tests,
+> you — through an authenticated REST API, the CLI, or the web UI. 1,488 tests,
 > `ruff` and `mypy` clean, migrations reversible, and a
 > [performance review](docs/performance.md) with measured numbers.
 
@@ -102,6 +102,7 @@ Where each shop stands, verified 2026-09-02:
 | Samsung | ✅ catalogue, prices filled in — current models only | ✅ |
 | BigBasket | ❌ search disallowed, publishes no catalogue | ✅ |
 | Blinkit | ❌ no crawlable catalogue | ⚠️ tracks, but reports `needs a delivery area` |
+| Amazon India (with `PLAYWRIGHT_ENABLED`) | — | ✅ delivery area set through Amazon's own widget |
 | Croma | ❌ blocks us (HTTP 403) | ❌ |
 | Sangeetha | ❌ stopped answering | ⚠️ intermittent |
 
@@ -877,7 +878,7 @@ docker build -f docker/Dockerfile `
 
 Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
 
-- **Test coverage** — 1,482 Python tests (unit, integration against a real PostgreSQL, and
+- **Test coverage** — 1,488 Python tests (unit, integration against a real PostgreSQL, and
   the API surface) plus 56 Vitest tests for the UI. CI fails the build if the
   database-backed tests are silently skipped.
 - **Docker** — multi-stage build (Node builds the SPA, and never enters the runtime

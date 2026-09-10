@@ -82,6 +82,14 @@ only written for what was actually learned.
 Indian retailers price and stock per delivery area, so every price this tracker has ever
 recorded came from *some* area — until `DELIVERY_PINCODE` existed, an unstated one.
 
+There are two routes, and which one is available decides the answer. A plain HTTP fetch
+cannot set an area on any catalogued shop, so it reports `needs_location`. A *rendered*
+check can operate the shop's own location widget — which was written off here as crossing
+the anti-bot line, and that was wrong. The line is **evasion**: stealth, fingerprint
+spoofing, CAPTCHA, credentials. Clicking a public control with a real browser, on a
+project that already renders pages to read JavaScript shops, is not that. Verified against
+Amazon India on 2026-09-10.
+
 `stores/pincode.py` is the single place that knows what each host does with a PIN code.
 Adapters never read `ctx.delivery_pincode`: they call `apply` on the way out and
 `escalate` on the way back. Today every classified host is `needs_js` — no shop takes a

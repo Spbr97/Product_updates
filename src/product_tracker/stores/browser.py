@@ -212,6 +212,57 @@ def render(
         return FetchFailure(FetchOutcome.ERROR, f"browser render failed: {_brief(exc)}")
 
 
+def _localise(page: object, url: str, ctx: FetchContext) -> bool:
+    """Set the delivery area through the shop's own widget. True if the page was reloaded.
+
+    Automation, not evasion: a real browser operating a public control, with no stealth,
+    no fingerprint spoofing, no CAPTCHA and no credentials -- the things the contract
+    forbids by name. Rendering pages with Playwright is already how this project reads
+    JavaScript shops; typing a PIN code into the box the site provides is the same act.
+
+    Every failure is swallowed and reported as "not localised". A shop that changes its
+    markup must degrade to the honest ``needs_location`` answer, never take the check down
+    with it -- a check that fails because a location widget moved is a worse outcome than
+    a price from an unstated area, which is at least recorded as such.
+    """
+    flow = pincode.browser_flow_for(url, ctx)
+    if flow is None:
+        return False
+
+    wanted = ctx.delivery_pincode or ""
+    try:
+        page.click(flow.open, timeout=10_000)  # type: ignore[attr-defined]
+        page.wait_for_selector(flow.field, state="visible", timeout=10_000)  # type: ignore[attr-defined]
+        page.fill(flow.field, wanted, timeout=10_000)  # type: ignore[attr-defined]
+        for selector in flow.submit:
+            try:
+                page.click(selector, timeout=4_000)  # type: ignore[attr-defined]
+                break
+            except Exception:
+                continue
+        page.wait_for_timeout(2_500)  # type: ignore[attr-defined]
+
+        if flow.reload_after:
+            page.goto(  # type: ignore[attr-defined]
+                url, wait_until="domcontentloaded", timeout=ctx.timeout_seconds * 1000
+            )
+
+        # Proving it took effect matters more than the click succeeding: a flow that
+        # silently does nothing leaves a price that *looks* localised and is not.
+        shown = page.inner_text(flow.confirms, timeout=5_000)  # type: ignore[attr-defined]
+        applied = wanted in shown
+        log.info(
+            "pincode.browser_flow",
+            host=host_of(url),
+            pincode=wanted,
+            applied=applied,
+        )
+        return applied
+    except Exception as exc:
+        log.info("pincode.browser_flow_failed", host=host_of(url), error=_brief(exc))
+        return False
+
+
 def _render_with(
     active: _Active, url: str, ctx: FetchContext, *, wait_for: str | None
 ) -> FetchSuccess | FetchFailure:
@@ -241,6 +292,11 @@ def _render_with(
                 url, wait_until="domcontentloaded", timeout=ctx.timeout_seconds * 1000
             )
             _settle(page, wait_for, ctx)
+
+            # Now that a page is loaded, the shop's own location control is reachable.
+            # This is the one thing a rendered check can do that a static one cannot.
+            if _localise(page, url, ctx):
+                _settle(page, wait_for, ctx)
 
             status = response.status if response is not None else None
             final_url = page.url

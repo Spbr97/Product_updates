@@ -343,3 +343,44 @@ class TestOutcomeClassification:
         assert not FetchOutcome.NEEDS_LOCATION.is_success
         assert not FetchOutcome.NEEDS_LOCATION.is_transient
 
+
+
+class TestBrowserFlowSelection:
+    """When a rendered check should try the shop's own location widget.
+
+    The gate matters more than the flow: a rendered check of an ordinary shop must cost
+    exactly what it did before this existed, so `browser_flow_for` has to return None in
+    every case except the one it is for.
+    """
+
+    def test_no_flow_without_a_pincode(self) -> None:
+        assert pincode.browser_flow_for(AMAZON, WITHOUT_PIN) is None
+
+    def test_no_flow_for_an_unclassified_host(self) -> None:
+        assert pincode.browser_flow_for(UNKNOWN, WITH_PIN) is None
+
+    def test_no_flow_for_a_host_without_one(self) -> None:
+        """Declared hosts without a verified widget must not pretend to have one."""
+        assert pincode.browser_flow_for(SAMSUNG, WITH_PIN) is None
+
+    def test_amazon_has_a_verified_flow(self) -> None:
+        flow = pincode.browser_flow_for(AMAZON, WITH_PIN)
+
+        assert flow is not None
+        assert flow.field and flow.open and flow.submit and flow.confirms
+
+    def test_every_declared_flow_can_prove_itself(self) -> None:
+        """`confirms` is not optional. A flow that clicks successfully but does not take
+        effect leaves a price that looks localised and is not -- which is worse than
+        reporting needs_location, because nothing says it happened."""
+        for domain, rule in pincode.RULES.items():
+            if rule.browser_flow is not None:
+                assert rule.browser_flow.confirms, domain
+                assert rule.browser_flow.submit, domain
+
+    def test_a_flow_only_appears_on_a_needs_js_host(self) -> None:
+        """A shop whose price is national has nothing to localise, so driving a widget on
+        it would be cost with no answer attached."""
+        for domain, rule in pincode.RULES.items():
+            if rule.browser_flow is not None:
+                assert rule.needs_js and not rule.location_independent, domain
