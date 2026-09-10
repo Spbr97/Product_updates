@@ -283,7 +283,7 @@ most:
 | `CHECK_CLAIM_LEASE_SECONDS` | `900` | How long a claimed check stands before another worker may take it over. |
 | `API_SHARED_RATE_LIMIT` | `true` | Keep the per-client rate limit in PostgreSQL so every API process shares one ceiling. In memory the configured limit is really the limit × the process count. |
 | `NOTIFICATION_DIGEST_MINUTES` | `0` | Batch alerts into one message. `0` sends each immediately. Above zero, alerts wait until the oldest is this old, then go out as one summary — thirty products cost one notification a period, not thirty. |
-| `BLOCK_PRIVATE_ADDRESSES` | `true` | SSRF guard. Rejects URLs resolving to private/loopback ranges. |
+| `BLOCK_PRIVATE_ADDRESSES` | `true` | SSRF guard. Rejects URLs resolving to private/loopback ranges — on the URL you give it and again on **every hop of a redirect chain**, before each is dialled. |
 | `NOTIFY_DEFAULT_PROVIDERS` | `console` | Comma-separated provider slugs. |
 
 Secrets (`SMTP_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `API_KEY`) are held as `SecretStr`, masked
@@ -893,9 +893,17 @@ Phase 7 in detail, since "quality pass" is easy to claim and hard to check:
   image), non-root user, healthchecks, `migrate` as a separate one-shot service.
 - **Docs** — this README, [`docs/architecture.md`](docs/architecture.md), and
   [`docs/performance.md`](docs/performance.md).
-- **Security review** — SSRF guard with re-validation after redirects, per-user API keys
+- **Security review** — SSRF guard validated per redirect hop, per-user API keys
   hashed at rest, secrets as `SecretStr` and stripped from logs, request-size and rate
   limits, no CAPTCHA or anti-bot evasion anywhere.
+
+  On that first point: the guard used to check the *final* URL after `httpx` had followed
+  the chain, which refused the answer but had already asked the question — a 302 to
+  `169.254.169.254` was fetched and then discarded. For a metadata endpoint or an internal
+  admin route, sending the request is the attack. Both fetch paths now check each hop
+  before it goes out: plain HTTP through an httpx request hook, the browser through a
+  Playwright route guard that aborts the navigation. `tests/unit/test_redirects.py`
+  asserts the internal request is never *made*, not merely never returned.
 - **Performance review** — [`docs/performance.md`](docs/performance.md). It found one
   real N+1 (a page of Product Entries cost 85 queries; now 6) and documents the scaling
   boundaries that remain, with the numbers they were measured at.

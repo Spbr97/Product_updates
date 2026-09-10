@@ -120,12 +120,25 @@ def fetch_bytes(url: str, ctx: FetchContext) -> FetchBytes | FetchFailure:
     return FetchBytes(content=raw.content, url=raw.url, http_status=raw.http_status)
 
 
+def _refuse_private_hosts(request: httpx.Request) -> None:
+    """Check the host of every request the client is about to send.
+
+    httpx runs this before each hop, so a 302 pointing at ``169.254.169.254`` is refused
+    before it is dialled rather than after it has been fetched and discarded.
+    """
+    assert_public_host(host_of(str(request.url)))
+
+
 def _fetch_raw(url: str, ctx: FetchContext) -> _Raw | FetchFailure:
     """The whole of the network path, shared by both public entry points.
 
     ``ctx.verify_public_host`` re-runs the SSRF check immediately before connecting.
     Validation at ``add`` time can be defeated by DNS rebinding, so the guard runs again
-    here, on the host we are about to contact -- including after redirects.
+    here, on the host we are about to contact -- on *every* hop of a redirect chain, via
+    the request hook, because httpx follows redirects itself. Checking the final URL after
+    the fact is not enough: by then the internal request has already gone out, and for
+    something like a cloud metadata endpoint or an internal admin route, issuing the GET
+    is the attack. The body was never returned, but the request was made.
 
     Delivery-area localisation is applied here rather than in each adapter so that
     :func:`fetch` and :func:`fetch_bytes` share it. ``pincode.apply`` is a no-op unless a
@@ -141,22 +154,16 @@ def _fetch_raw(url: str, ctx: FetchContext) -> _Raw | FetchFailure:
     url, cookies = pincode.apply(url, ctx)
 
     try:
-        if verify_host:
-            assert_public_host(host_of(url))
-
         with httpx.Client(
             headers=headers,
             cookies=cookies,
             timeout=ctx.timeout_seconds,
             follow_redirects=True,
             max_redirects=5,
+            event_hooks={"request": [_refuse_private_hosts]} if verify_host else {},
         ) as client, client.stream("GET", url) as response:
             final_url = str(response.url)
             status = response.status_code
-
-            if verify_host and final_url != url:
-                # A redirect can point somewhere internal; re-check the final host.
-                assert_public_host(host_of(final_url))
 
             failure = _classify_status(response)
             if failure is not None:

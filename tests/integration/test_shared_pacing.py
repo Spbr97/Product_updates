@@ -105,14 +105,20 @@ class TestConcurrentCallers:
     def test_threads_are_given_distinct_slots(self) -> None:
         """Ten callers at once get ten different turns, not ten simultaneous ones."""
         guard = build(interval=0.25)
-        waits: list[float] = []
+        goes: list[float] = []
         lock = threading.Lock()
 
         def claim() -> None:
             wait, refusal = guard._claim(HOST)
+            # When this caller may go, on one shared clock -- not how long it was told to
+            # wait. The raw waits measure thread scheduling as much as pacing: a thread
+            # that reaches `_claim` a tenth of a second after its neighbour is handed a
+            # wait a tenth shorter, and under a loaded `-n auto` run that skew closes a
+            # gap the guard did in fact leave. This failed once in three runs before.
+            go_at = time.monotonic() + wait
             assert refusal is None
             with lock:
-                waits.append(wait)
+                goes.append(go_at)
 
         threads = [threading.Thread(target=claim) for _ in range(10)]
         for thread in threads:
@@ -120,13 +126,13 @@ class TestConcurrentCallers:
         for thread in threads:
             thread.join()
 
-        ordered = sorted(waits)
+        ordered = sorted(goes)
         assert len(ordered) == 10
         # No two callers were told to go at the same moment.
         for earlier, later in pairwise(ordered):
             assert later - earlier >= 0.15
-        # And the last one waits roughly nine gaps, not none.
-        assert ordered[-1] == pytest.approx(0.25 * 9, abs=0.5)
+        # And the tenth turn is roughly nine gaps after the first, not none.
+        assert ordered[-1] - ordered[0] == pytest.approx(0.25 * 9, abs=0.5)
 
 
 class TestRefusingRatherThanQueueing:

@@ -24,6 +24,7 @@ thread-safe, so a session opened in one thread must never be visible to another.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from types import TracebackType
@@ -263,12 +264,38 @@ def _localise(page: object, url: str, ctx: FetchContext) -> bool:
         return False
 
 
+def _refuse_private_navigations(refusals: list[str]) -> Callable[[Any, Any], None]:
+    """A route handler that aborts a navigation to a host that is not public.
+
+    ``page.goto`` follows redirects itself, so reading ``page.url`` afterwards learns
+    where we ended up only once that request has already gone out. For an internal admin
+    route or a cloud metadata endpoint, making the request *is* the attack -- discarding
+    the response afterwards does not undo it. The refusal is collected rather than raised,
+    because an aborted route surfaces as an ordinary navigation error and we want to say
+    which it was.
+    """
+
+    def handle(route: Any, request: Any) -> None:
+        if request.is_navigation_request():
+            try:
+                assert_public_host(host_of(request.url))
+            except (UnsafeURLError, InvalidURLError) as exc:
+                refusals.append(str(exc))
+                route.abort()
+                return
+        route.continue_()
+
+    return handle
+
+
 def _render_with(
     active: _Active, url: str, ctx: FetchContext, *, wait_for: str | None
 ) -> FetchSuccess | FetchFailure:
     """Load one page in an already-running browser."""
     verify_host = ctx.verify_public_host
     playwright = active.playwright
+    #: Filled by the route guard when it turns a navigation away.
+    refusals: list[str] = []
     # Same localisation the plain HTTP path applies, so a rendered check and a fetched
     # one ask the same question. A no-op unless a PIN code is configured and the host
     # has a static way to take one.
@@ -288,9 +315,18 @@ def _render_with(
                         for name, value in cookies.items()
                     ]
                 )
-            response = page.goto(
-                url, wait_until="domcontentloaded", timeout=ctx.timeout_seconds * 1000
-            )
+            if verify_host:
+                page.route("**/*", _refuse_private_navigations(refusals))
+
+            try:
+                response = page.goto(
+                    url, wait_until="domcontentloaded", timeout=ctx.timeout_seconds * 1000
+                )
+            except Exception:
+                # An aborted route looks like any other navigation failure from here.
+                if refusals:
+                    raise UnsafeURLError(refusals[0]) from None
+                raise
             _settle(page, wait_for, ctx)
 
             # Now that a page is loaded, the shop's own location control is reachable.
@@ -300,7 +336,11 @@ def _render_with(
 
             status = response.status if response is not None else None
             final_url = page.url
+            if refusals:
+                raise UnsafeURLError(refusals[0])
             if verify_host and final_url != url:
+                # Belt and braces: the route guard covers redirects, this covers a page
+                # that navigated itself somewhere else after loading.
                 assert_public_host(host_of(final_url))
 
             html = page.content()

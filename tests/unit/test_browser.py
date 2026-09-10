@@ -35,15 +35,59 @@ class FakeResponse:
         self.status = status
 
 
+class FakeRequest:
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+    def is_navigation_request(self) -> bool:
+        """Every hop these fakes make is a navigation; subresources are not modelled."""
+        return True
+
+
+class FakeRoute:
+    def __init__(self) -> None:
+        self.aborted = False
+
+    def abort(self) -> None:
+        self.aborted = True
+
+    def continue_(self) -> None:
+        pass
+
+
 class FakePage:
     def __init__(self, owner: FakeBrowser) -> None:
         self.owner = owner
         self.url = owner.final_url
+        self.handlers: list[object] = []
+
+    def route(self, _pattern: str, handler: object) -> None:
+        self.handlers.append(handler)
+
+    def _dial(self, url: str) -> bool:
+        """Offer one hop to the route handlers, the way Playwright does.
+
+        Returns whether the request would actually have left the machine, which is the
+        thing worth asserting: refusing the answer is not the same as not asking.
+        """
+        request = FakeRequest(url)
+        for handler in self.handlers:
+            route = FakeRoute()
+            handler(route, request)  # type: ignore[operator]
+            if route.aborted:
+                return False
+        self.owner.dialled.append(url)
+        return True
 
     def goto(self, url: str, **_kwargs: object) -> FakeResponse | None:
         self.owner.visited.append(url)
         if self.owner.raise_on_goto is not None:
             raise self.owner.raise_on_goto
+        # A differing final_url means the fake shop redirected; dial both hops.
+        hops = [url] if url == self.owner.final_url else [url, self.owner.final_url]
+        for hop in hops:
+            if not self._dial(hop):
+                raise FakePlaywrightError(f"net::ERR_ABORTED at {hop}")
         return FakeResponse(self.owner.status)
 
     def wait_for_timeout(self, _ms: int) -> None:
@@ -72,6 +116,7 @@ class FakeBrowser:
         self.status = owner.status
         self.final_url = owner.final_url
         self.visited = owner.visited
+        self.dialled = owner.dialled
         self.raise_on_goto = owner.raise_on_goto
 
     def new_page(self, **_kwargs: object) -> FakePage:
@@ -90,6 +135,7 @@ class FakeChromium:
         self.status = parent.status
         self.final_url = parent.final_url
         self.visited = parent.visited
+        self.dialled = parent.dialled
         self.raise_on_goto = parent.raise_on_goto
         self.closed = False
         self.launches = 0
@@ -122,6 +168,8 @@ class FakePlaywright:
         self.raise_on_goto = raise_on_goto
         self.missing_selectors = missing_selectors
         self.visited: list[str] = []
+        #: Hops that actually got past the route guard.
+        self.dialled: list[str] = []
         self.chromium = FakeChromium(self)
         self.browser: FakeBrowser | None = None
         self.stopped = False
@@ -309,6 +357,51 @@ class TestHostVerification:
         browser.render("http://127.0.0.1/admin", FetchContext(verify_public_host=True))
 
         assert not playwright_stub.launched()
+
+
+class TestRedirectsInTheBrowser:
+    """The same hole the plain HTTP path had, in the path that renders JavaScript.
+
+    ``page.goto`` follows redirects itself, so reading ``page.url`` afterwards tells you
+    where you ended up only once that request has been made. A shop that answers with a
+    302 to an internal address would have had that address fetched before anything
+    objected.
+    """
+
+    PUBLIC = "https://93.184.216.34/p/1"
+    METADATA = "http://169.254.169.254/latest/meta-data/"
+
+    def test_a_redirect_to_an_internal_address_is_refused(
+        self, playwright_stub: PlaywrightStub
+    ) -> None:
+        playwright_stub.config["final_url"] = self.METADATA
+
+        result = browser.render(self.PUBLIC, FetchContext(verify_public_host=True))
+
+        assert isinstance(result, FetchFailure)
+        assert result.outcome is FetchOutcome.ERROR
+        assert "refused for safety" in result.message
+
+    def test_the_internal_hop_is_never_dialled(self, playwright_stub: PlaywrightStub) -> None:
+        playwright_stub.config["final_url"] = self.METADATA
+
+        browser.render(self.PUBLIC, FetchContext(verify_public_host=True))
+
+        dialled = playwright_stub[0].dialled
+        assert self.PUBLIC in dialled
+        assert self.METADATA not in dialled
+
+    def test_a_redirect_somewhere_public_still_works(
+        self, playwright_stub: PlaywrightStub
+    ) -> None:
+        """Guarding must not mean refusing every redirect: shops move listings around
+        constantly, and a rendered check that broke on a 302 would be useless."""
+        playwright_stub.config["final_url"] = "https://93.184.216.35/p/2"
+
+        result = browser.render(self.PUBLIC, FetchContext(verify_public_host=True))
+
+        assert isinstance(result, FetchSuccess)
+        assert playwright_stub[0].dialled == [self.PUBLIC, "https://93.184.216.35/p/2"]
 
 
 class TestSessionReuse:

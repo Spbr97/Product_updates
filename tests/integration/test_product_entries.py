@@ -219,6 +219,61 @@ class TestDuplicates:
         assert again.id != entry.id
 
 
+class TestNamesAreNotIdentifiers:
+    """A name is a label, not a key -- and that is a decision, not an oversight.
+
+    Two people can reasonably both call an entry "Galaxy S25", and one person can
+    reasonably track "Galaxy S25" twice while deciding between the 256GB and the 512GB.
+    A unique index on ``canonical_name`` would forbid both, and it is the kind of
+    constraint somebody adds later because it looks tidy. These tests are what makes that
+    change fail loudly instead of quietly breaking a user's second listing.
+    """
+
+    def test_one_user_may_reuse_a_name(self, service: ProductEntryService) -> None:
+        stub_all()
+        first = make(service, name="Galaxy S25")
+
+        second = make(
+            service,
+            name="Galaxy S25",
+            amazon_url=AMAZON_URL_2,
+            flipkart_url=FLIPKART_URL_2,
+        )
+
+        assert second.id != first.id
+        assert second.canonical_name == first.canonical_name == "Galaxy S25"
+
+    def test_two_users_may_hold_the_same_name(
+        self, db_session: Session, settings: Settings, service: ProductEntryService
+    ) -> None:
+        stub_all()
+        mine = make(service, name="Galaxy S25")
+        other = int(user_service.create_user(db_session, email="twin@example.com").user.id)
+
+        theirs = make(
+            ProductEntryService(db_session, default_registry(), settings, other),
+            name="Galaxy S25",
+        )
+
+        assert theirs.id != mine.id
+        assert theirs.canonical_name == mine.canonical_name
+
+    def test_a_reused_name_does_not_leak_the_other_account(
+        self, db_session: Session, settings: Settings, service: ProductEntryService
+    ) -> None:
+        """The interesting half. Sharing a name must not turn into sharing a list --
+        which is precisely what a lookup written against the name rather than the id
+        would do."""
+        stub_all()
+        make(service, name="Galaxy S25")
+        other = int(user_service.create_user(db_session, email="twin2@example.com").user.id)
+        theirs = ProductEntryService(db_session, default_registry(), settings, other)
+        make(theirs, name="Galaxy S25")
+
+        assert theirs.list().total == 1
+        assert service.list().total == 1
+
+
 class TestUpdating:
     def test_renaming_preserves_the_id(self, service: ProductEntryService) -> None:
         stub_all()
