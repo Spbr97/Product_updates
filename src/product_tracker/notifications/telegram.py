@@ -26,12 +26,23 @@ class TelegramProvider(NotificationProvider):
         self.settings = settings
 
     def is_configured(self) -> bool:
-        return bool(self.settings.telegram_bot_token and self.settings.telegram_chat_id)
+        """The bot token is the deployment's; the chat id can be the account's.
+
+        So only the token is required here -- see the note on the email provider.
+        """
+        return bool(self.settings.telegram_bot_token)
 
     def send(self, message: NotificationMessage) -> None:
         settings = self.settings
         if not self.is_configured() or settings.telegram_bot_token is None:
             raise NotificationDeliveryError(self.slug, "Telegram is not configured")
+
+        chat_id = message.recipients.get(self.slug) or settings.telegram_chat_id
+        if not chat_id:
+            raise NotificationDeliveryError(
+                self.slug,
+                "no chat id: set TELEGRAM_CHAT_ID, or give the account a notify chat id",
+            )
 
         token = settings.telegram_bot_token.get_secret_value()
         url = f"{API_BASE}/bot{token}/sendMessage"
@@ -40,7 +51,7 @@ class TelegramProvider(NotificationProvider):
             response = httpx.post(
                 url,
                 json={
-                    "chat_id": settings.telegram_chat_id,
+                    "chat_id": chat_id,
                     "text": render_plain_text(message),
                     "disable_web_page_preview": True,
                 },

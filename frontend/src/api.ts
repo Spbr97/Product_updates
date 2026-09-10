@@ -229,6 +229,34 @@ export function setUnauthorizedHandler(fn: (() => void) | null): void {
   onUnauthorized = fn;
 }
 
+/**
+ * Take a key out of the URL, if this is a sign-in link, and put it away.
+ *
+ * Handing somebody a link beats asking them to paste a 46-character secret they cannot
+ * see themselves typing, which is what a password field means in practice. The cost is
+ * that the key is briefly in the address bar, so it is removed from there the moment it
+ * is stored -- otherwise it lands in the browser's history, in a bookmark, and in the
+ * next screenshot. `replaceState` rather than `pushState`, so Back does not walk into a
+ * URL still carrying the credential.
+ *
+ * Only the query string is read, never the hash: a fragment is not sent to the server,
+ * but it also survives redirects in ways that are easy to misjudge.
+ */
+export function adoptKeyFromUrl(): boolean {
+  try {
+    const url = new URL(window.location.href);
+    const supplied = url.searchParams.get("key");
+    if (!supplied) return false;
+
+    setApiKey(supplied);
+    url.searchParams.delete("key");
+    window.history.replaceState({}, "", url.toString());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function setApiKey(key: string | null): void {
   try {
     if (key) window.localStorage.setItem("pt_key", key);

@@ -811,6 +811,18 @@ product-tracker users rotate-key alice@example.com   # revokes and reissues
 Set `API_ALLOW_ANONYMOUS_READS=false` too, so the intent survives someone later deciding
 the side effect was accidental.
 
+**Alerts go to each person, not to one inbox.** Rules are per-account, and so is their
+destination — otherwise everyone's price alerts arrive in whoever's address `SMTP_TO`
+names:
+
+```powershell
+product-tracker users set-notify alice@example.com --email alice@inbox.example
+product-tracker users set-notify rahul@example.com --telegram 987654321
+```
+
+An account without one falls back to the deployment setting, so a single-user install is
+unchanged. Configure SMTP or a bot token once; the per-account value only decides where.
+
 **2. Then expose it.** A Cloudflare quick tunnel needs no account:
 
 ```powershell

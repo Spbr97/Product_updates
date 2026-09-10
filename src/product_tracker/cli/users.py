@@ -140,6 +140,49 @@ def set_active(
     success(f"{identifier} is now {'active' if active else 'inactive'}")
 
 
+def set_notify(
+    identifier: Annotated[str, typer.Argument(help="Account id or email.")],
+    email: Annotated[
+        str | None, typer.Option("--email", help="Send this account's alerts here.")
+    ] = None,
+    telegram: Annotated[
+        str | None, typer.Option("--telegram", help="Telegram chat id for this account.")
+    ] = None,
+) -> None:
+    """Route this account's alerts to its own address.
+
+    Without this, every account's alerts go to the deployment-wide SMTP_TO or
+    TELEGRAM_CHAT_ID -- right for one person, wrong the moment there are two.
+    """
+    if email is None and telegram is None:
+        error("give --email, --telegram, or both")
+        raise typer.Exit(ExitCode.CONFIG_ERROR)
+
+    try:
+        with session_scope() as session:
+            user = user_service.set_notify(
+                session,
+                int(identifier) if identifier.isdigit() else identifier,
+                email=email,
+                telegram_chat_id=telegram,
+            )
+            destinations = [
+                f"email {user.notify_email}" if user.notify_email else None,
+                f"telegram {user.notify_telegram_chat_id}"
+                if user.notify_telegram_chat_id
+                else None,
+            ]
+    except NotFoundError as exc:
+        error(str(exc))
+        raise typer.Exit(ExitCode.NOT_FOUND) from exc
+
+    named = ", ".join(d for d in destinations if d)
+    if named:
+        success(f"{identifier} alerts go to {named}")
+    else:
+        success(f"{identifier} falls back to the deployment default")
+
+
 def remove_user(
     identifier: Annotated[str, typer.Argument(help="Account id or email.")],
 ) -> None:
@@ -170,4 +213,5 @@ users_app.command("list")(list_users)
 users_app.command("add")(add_user)
 users_app.command("rotate-key")(rotate_key)
 users_app.command("set-active")(set_active)
+users_app.command("set-notify")(set_notify)
 users_app.command("remove")(remove_user)

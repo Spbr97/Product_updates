@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { hasApiKey, setApiKey, setUnauthorizedHandler } from "./api";
+import { adoptKeyFromUrl, hasApiKey, setApiKey, setUnauthorizedHandler } from "./api";
 import { SignIn } from "./pages/SignIn";
 
 /** The shell: a header, the routed page, and the standing reminder about honesty. */
 export function App() {
   const [locked, setLocked] = useState(false);
-  const [signedIn, setSignedIn] = useState(hasApiKey);
+  // Read before the first render, so a sign-in link never flashes the sign-in screen on
+  // its way past. useState's initialiser runs once, which is exactly the shape wanted.
+  const [signedIn, setSignedIn] = useState(() => {
+    adoptKeyFromUrl();
+    return hasApiKey();
+  });
   // Bumped on sign-in to remount the routed page so it refetches with the new key.
   const [nonce, setNonce] = useState(0);
   const location = useLocation();

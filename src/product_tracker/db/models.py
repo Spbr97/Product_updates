@@ -105,6 +105,10 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     name: Mapped[str | None] = mapped_column(String(200))
     api_key_hash: Mapped[str | None] = mapped_column(String(64))
+    #: Where this account's alerts go, per channel. Null falls back to the deployment
+    #: setting, so a single-user install behaves exactly as it did before these existed.
+    notify_email: Mapped[str | None] = mapped_column(String(320))
+    notify_telegram_chat_id: Mapped[str | None] = mapped_column(String(64))
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
@@ -576,6 +580,9 @@ class TrackingRule(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     rule_type: Mapped[RuleType] = mapped_column(_pg_enum(RuleType, "rule_type"), nullable=False)
+    #: Whose rule this is. Delivery needs it to find the account's notify address; the
+    #: alternative is a query per notification on the delivery path.
+    user: Mapped[User] = relationship(lazy="joined")
     params: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
     )
@@ -618,6 +625,9 @@ class Notification(Base):
     tracking_rule_id: Mapped[int | None] = mapped_column(
         ForeignKey("tracking_rules.id", ondelete="SET NULL")
     )
+    #: The rule that raised this, when it still exists -- a deleted rule leaves the
+    #: notification behind, which is why the column and this are both optional.
+    rule: Mapped[TrackingRule | None] = relationship(lazy="joined")
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     dedupe_key: Mapped[str] = mapped_column(String(128), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(

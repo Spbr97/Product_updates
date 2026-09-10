@@ -153,8 +153,43 @@ class TestTelegramProvider:
     def test_unconfigured_without_token(self) -> None:
         assert not TelegramProvider(settings(telegram_chat_id="42")).is_configured()
 
-    def test_unconfigured_without_chat_id(self) -> None:
-        assert not TelegramProvider(settings(telegram_bot_token=BOT_TOKEN)).is_configured()
+    def test_a_token_alone_counts_as_configured(self) -> None:
+        """Because the chat id can come from the account rather than the deployment.
+
+        ``is_configured`` is asked before any message exists, so it cannot see a
+        per-account destination. Requiring a deployment-wide chat id here would hide the
+        provider entirely from an install that routes each person's alerts to their own
+        chat -- which is the whole point of having per-account destinations.
+        """
+        assert TelegramProvider(settings(telegram_bot_token=BOT_TOKEN)).is_configured()
+
+    def test_but_sending_without_any_chat_id_is_refused(self) -> None:
+        """The check moves to ``send``, where a message exists and the question can
+        actually be answered. It must not quietly send nowhere."""
+        provider = TelegramProvider(settings(telegram_bot_token=BOT_TOKEN))
+
+        with pytest.raises(NotificationDeliveryError) as raised:
+            provider.send(MESSAGE)
+
+        assert "chat id" in str(raised.value)
+
+    def test_a_message_carrying_its_own_chat_id_is_sent_there(self) -> None:
+        """Two people, two chats, one bot token."""
+        from dataclasses import replace
+
+        route = respx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        provider = TelegramProvider(settings(telegram_bot_token=BOT_TOKEN, telegram_chat_id="42"))
+
+        provider.send(replace(MESSAGE, recipients={"telegram": "99"}))
+
+        assert route.called
+        # Parsed, not string-matched: the payload is compact JSON and an assertion about
+        # its spacing tests the serialiser rather than the routing.
+        import json
+
+        assert json.loads(route.calls[0].request.read())["chat_id"] == "99"
 
     def test_posts_the_message(self) -> None:
         route = respx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage").mock(

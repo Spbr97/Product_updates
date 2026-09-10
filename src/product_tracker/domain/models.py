@@ -195,6 +195,11 @@ class NotificationMessage:
     body: str
     url: str | None = None
     context: dict[str, Any] = field(default_factory=dict)
+    #: Where to send it, keyed by provider slug -- ``{"email": "her@example.com"}``.
+    #: Empty means "wherever this deployment is configured to send", which is what every
+    #: single-user install wants. Resolving it here rather than in the provider keeps the
+    #: provider ignorant of accounts, which is the whole point of the interface.
+    recipients: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

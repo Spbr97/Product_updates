@@ -272,13 +272,21 @@ class NotificationService:
             log.debug("notification.digest_waiting", waiting=len(rows))
             return DeliveryReport(created=0, sent=0, failed=0, suppressed=0)
 
-        batches: dict[tuple[str, ...], list[Notification]] = {}
+        # Keyed by provider set *and* recipient. Grouping on providers alone was correct
+        # while every alert went to one deployment-wide address; with per-account
+        # destinations it would put Alice's alerts and Bob's into one message and send it
+        # to whichever of them the batch happened to name. A digest is a delivery-time
+        # convenience and must never widen who can see an alert.
+        batches: dict[_BatchKey, list[Notification]] = {}
         for row in rows:
-            key = tuple(p.slug for p in self._providers_for(row))
+            key: _BatchKey = (
+                tuple(p.slug for p in self._providers_for(row)),
+                tuple(sorted(recipients_for(row).items())),
+            )
             batches.setdefault(key, []).append(row)
 
         sent = failed = suppressed = 0
-        for slugs, batch in batches.items():
+        for (slugs, _recipients), batch in batches.items():
             if not slugs:
                 for row in batch:
                     self.repo.mark_suppressed(
@@ -384,7 +392,30 @@ def _digest_message(batch: list[Notification]) -> NotificationMessage:
             "count": len(batch),
             "notification_ids": [row.id for row in batch],
         },
+        # Every row in a batch shares a recipient by construction -- that is what the
+        # batch key guarantees -- so the first one speaks for all of them.
+        recipients=recipients_for(batch[0]),
     )
+
+
+#: How a digest batch is keyed: the providers that would receive it, and where it goes.
+_BatchKey = tuple[tuple[str, ...], tuple[tuple[str, str], ...]]
+
+
+def recipients_for(notification: Notification) -> dict[str, str]:
+    """Where this alert's owner wants it sent, keyed by provider slug.
+
+    An alert belongs to a rule, and a rule belongs to an account. Empty when the account
+    has set nothing, which leaves the provider on the deployment default -- the behaviour
+    every single-user install already has.
+    """
+    rule = notification.rule
+    owner = rule.user if rule is not None else None
+    if owner is None:
+        return {}
+
+    destinations = {"email": owner.notify_email, "telegram": owner.notify_telegram_chat_id}
+    return {slug: value for slug, value in destinations.items() if value}
 
 
 def _message_from(notification: Notification) -> NotificationMessage:
@@ -395,4 +426,5 @@ def _message_from(notification: Notification) -> NotificationMessage:
         body=str(payload.get("body") or ""),
         url=context.get("url"),
         context=context,
+        recipients=recipients_for(notification),
     )

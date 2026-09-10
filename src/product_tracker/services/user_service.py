@@ -112,6 +112,32 @@ def set_active(session: Session, identifier: int | str, *, active: bool) -> User
     return user
 
 
+def set_notify(
+    session: Session,
+    identifier: int | str,
+    *,
+    email: str | None = None,
+    telegram_chat_id: str | None = None,
+) -> User:
+    """Point this account's alerts at its own address.
+
+    Only what is passed changes, so setting an email does not silently clear a Telegram
+    chat id somebody configured last week. Pass an empty string to clear one -- explicit,
+    and distinguishable from "leave it alone", which ``None`` means.
+
+    A destination here overrides the deployment-wide ``SMTP_TO`` / ``TELEGRAM_CHAT_ID``
+    for this account only. Accounts without one keep falling back, so a single-user
+    install is unaffected.
+    """
+    user = get_user(session, identifier)
+    if email is not None:
+        user.notify_email = email.strip() or None
+    if telegram_chat_id is not None:
+        user.notify_telegram_chat_id = telegram_chat_id.strip() or None
+    session.flush()
+    return user
+
+
 def delete_user(session: Session, identifier: int | str) -> None:
     """Remove an account, its subscriptions, its groups and its alerts.
 

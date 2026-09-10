@@ -24,20 +24,31 @@ class EmailProvider(NotificationProvider):
         self.settings = settings
 
     def is_configured(self) -> bool:
-        """Host, sender, and recipient are the minimum; auth is optional (local relays)."""
-        return bool(
-            self.settings.smtp_host and self.settings.smtp_from and self.settings.smtp_to
-        )
+        """Host and sender are the minimum; auth is optional (local relays).
+
+        A recipient is deliberately not required here. ``is_configured`` is asked before
+        any message exists, and an account can carry its own address -- so demanding a
+        deployment-wide ``SMTP_TO`` would hide this provider from every install that
+        routes per person instead. ``send`` refuses when no address resolves.
+        """
+        return bool(self.settings.smtp_host and self.settings.smtp_from)
 
     def send(self, message: NotificationMessage) -> None:
         settings = self.settings
         if not self.is_configured():
             raise NotificationDeliveryError(self.slug, "SMTP is not configured")
 
+        # The account's own address wins; the deployment setting is the fallback.
+        to = message.recipients.get(self.slug) or settings.smtp_to
+        if not to:
+            raise NotificationDeliveryError(
+                self.slug, "no recipient: set SMTP_TO, or give the account a notify address"
+            )
+
         email = EmailMessage()
         email["Subject"] = message.title
         email["From"] = str(settings.smtp_from)
-        email["To"] = str(settings.smtp_to)
+        email["To"] = str(to)
         email.set_content(render_plain_text(message))
 
         try:
