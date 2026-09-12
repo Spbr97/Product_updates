@@ -1,0 +1,71 @@
+# Fly.io deployment for Product Tracker.
+#
+# One-time setup (run these yourself -- flyctl login opens a browser, which this
+# session cannot do):
+#
+#   curl -L https://fly.io/install.sh | sh          # or: iwr https://fly.io/install.ps1 -useb | iex
+#   fly auth login
+#   fly launch --no-deploy --copy-config --name <your-unique-app-name>
+#   fly postgres create --name product-tracker-db --region bom --vm-size shared-cpu-1x --volume-size 1
+#   fly postgres attach product-tracker-db -a <your-app-name>     # sets DATABASE_URL secret automatically
+#   fly secrets set API_KEY="$(openssl rand -hex 32)" -a <your-app-name>
+#   fly deploy -a <your-app-name>
+#
+# `fly postgres attach` writes DATABASE_URL as `postgresql://...`; this app needs the
+# psycopg driver in the URL, so after attaching, patch it once:
+#   fly secrets set DATABASE_URL="postgresql+psycopg://$(fly postgres attach product-tracker-db -a <your-app-name> --output json | ...)"
+# -- simplest in practice: fly ssh console -a <your-app-name> -C 'env | grep DATABASE_URL',
+# copy the value, insert +psycopg after postgresql, and `fly secrets set DATABASE_URL=...`.
+
+app = "product-tracker"          # fly launch will prompt to rename if taken
+primary_region = "bom"           # Mumbai -- closest to the Indian retail sites being polled
+
+[build]
+  dockerfile = "docker/Dockerfile"
+  # Lean image (no browser) by default. To enable Playwright-rendered checks (needed for
+  # Amazon India delivery-area localisation), rebuild with:
+  #   fly deploy --build-arg BASE_IMAGE=mcr.microsoft.com/playwright/python:v1.47.0-jammy --build-arg EXTRAS=browser
+  # and bump [[vm]] memory below to at least 1024mb -- Chromium does not fit in 512mb.
+
+[deploy]
+  release_command = "alembic upgrade head"
+
+[env]
+  LOG_LEVEL = "INFO"
+  LOG_FORMAT = "json"
+  # Public-facing: anonymous reads must be off, and API_KEY (set as a secret, never here)
+  # is what gates every mutating request once it's set.
+  API_ALLOW_ANONYMOUS_READS = "false"
+  PLAYWRIGHT_ENABLED = "false"
+  NOTIFY_DEFAULT_PROVIDERS = "console"
+  STORE_MIN_INTERVAL_SECONDS = "5"
+  FETCH_JITTER_SECONDS = "3"
+
+[processes]
+  api = "uvicorn product_tracker.api.app:get_app --factory --host 0.0.0.0 --port 8000"
+  worker = "product-tracker worker"
+
+[http_service]
+  internal_port = 8000
+  processes = ["api"]
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[http_service.checks]]
+  grace_period = "15s"
+  interval = "15s"
+  method = "GET"
+  path = "/health"
+  timeout = "5s"
+
+[[vm]]
+  processes = ["api"]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[[vm]]
+  processes = ["worker"]
+  size = "shared-cpu-1x"
+  memory = "512mb"
