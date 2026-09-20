@@ -121,9 +121,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # under an id. A request that was refused is exactly the one someone asks about.
     app.add_middleware(RequestIdMiddleware)
 
-    from .routers import health  # Imported here to keep module import side-effect free.
+    from .routers import health, internal  # Imported here, side-effect free.
 
     app.include_router(health.router)
+    app.include_router(internal.router)
     app.include_router(build_v1_router())
 
     # The Product Entry SPA, mounted last and outside the versioned router: the shell is

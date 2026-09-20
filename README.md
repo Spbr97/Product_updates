@@ -252,6 +252,7 @@ most:
 | `MAX_LISTINGS_PER_USER` | `200` | Per-account ceiling. Also `MAX_GROUPS_PER_USER`, `MAX_ALERTS_PER_USER`. |
 | `API_KEY` | *(unset)* | If set, required as `X-API-Key` on mutating endpoints. Unset means the API is open — fine on localhost, not in public. |
 | `API_ALLOW_ANONYMOUS_READS` | `true` | Set `false` to require the key on `GET` too. |
+| `INTERNAL_SCHEDULER_TOKEN` | *(unset)* | If set, required as `X-Internal-Token` on `POST /internal/scheduler/check-all` — a bulk sweep for a host with no persistent worker. Unlike `API_KEY`, unset means the route refuses everything; see [`docs/deployment-free-tier.md`](docs/deployment-free-tier.md). |
 | `API_MAX_REQUEST_BYTES` | `64000` | Bodies over this are rejected with 413. |
 | `API_RATE_LIMIT_PER_MINUTE` / `API_RATE_LIMIT_BURST` | `60` / `20` | State-changing requests per client. Reads and health probes are exempt. |
 | `NOTIFICATION_DEDUPE_WINDOW_SECONDS` | `86400` | How long the same alert is suppressed. Shorten for volatile prices. |
@@ -413,6 +414,13 @@ uvicorn product_tracker.api.app:get_app --factory --reload
   what separate a Galaxy S25 from a Galaxy S25 FE; a client that ignores them will
   track the wrong phone. A `POST` on purpose: it is the one route that causes outbound
   traffic to real shops, and the rate limiter exempts `GET`.
+- `/internal/scheduler/check-all` — `POST`, unversioned, guarded by `X-Internal-Token`
+  (`INTERNAL_SCHEDULER_TOKEN`) rather than `X-API-Key`. Runs one bulk sweep of every
+  schedulable product right now — the same `run_all_checks` service the CLI's
+  `check-all` calls, through the same claim guard the background worker uses, so this is
+  safe to call on a schedule even beside a live worker. For a host that cannot keep
+  `product-tracker worker` running; see
+  [`docs/deployment-free-tier.md`](docs/deployment-free-tier.md).
 
 `GET /health/ready` reports four dependencies: `database`, `scheduler`,
 `notifications`, and `auth`. Only the database gates readiness — an API that can serve
@@ -837,6 +845,11 @@ shows a sign-in screen.
 The link lives only as long as the process and the laptop, and the hostname is regenerated
 each restart — fine for a trial, useless as a permanent address. A named tunnel on a domain
 you own fixes both and needs an account.
+
+**A permanent public deployment, on free-tier hosting**, is a different path from a
+tunnel to your own machine: see
+[`docs/deployment-free-tier.md`](docs/deployment-free-tier.md) (Supabase + Render +
+GitHub Actions in place of a persistent worker).
 
 ## 16. Docker setup
 

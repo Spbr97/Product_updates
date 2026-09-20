@@ -142,6 +142,16 @@ class Settings(BaseSettings):
         ),
     )
     api_allow_anonymous_reads: bool = True
+    internal_scheduler_token: SecretStr | None = Field(
+        default=None,
+        description=(
+            "If set, required as X-Internal-Token on POST /internal/scheduler/check-all. "
+            "That route runs every schedulable product's check on demand, for a host that "
+            "cannot keep the background worker alive -- an external cron calls it instead. "
+            "Unset means the route refuses every request: there is no anonymous fallback "
+            "the way there is for reads, because triggering outbound checks is a write."
+        ),
+    )
     api_max_page_size: int = Field(default=100, ge=1, le=1000)
     api_default_page_size: int = Field(default=20, ge=1, le=1000)
     api_rate_limit_per_minute: int = Field(
@@ -261,7 +271,9 @@ class Settings(BaseSettings):
             )
         return value
 
-    @field_validator("api_key", "smtp_password", "telegram_bot_token", mode="before")
+    @field_validator(
+        "api_key", "internal_scheduler_token", "smtp_password", "telegram_bot_token", mode="before"
+    )
     @classmethod
     def _blank_secret_is_unset(cls, value: object) -> object:
         """Treat an empty or whitespace-only secret as absent.

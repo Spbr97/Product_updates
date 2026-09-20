@@ -30,6 +30,8 @@ from ..db.session import session_scope
 from ..domain.enums import Availability, CheckStatus, FetchMethod
 from ..domain.models import CheckGuard
 from ..notifications.base import NotificationProvider
+from ..repositories.products import ProductRepository
+from ..stores import browser
 from ..stores.registry import StoreRegistry, default_registry
 from .notification_service import DeliveryReport, NotificationService
 from .tracking import TrackingEngine
@@ -124,6 +126,80 @@ def deliver_pending(
     with session_scope() as session:
         service = NotificationService(session, settings, providers=providers)
         return service.deliver_pending(limit=limit, product_id=product_id)
+
+
+@dataclass(frozen=True, slots=True)
+class CheckAllSummary:
+    """The result of a bulk sweep -- every caller that checks "everything due" gets this.
+
+    The CLI's ``check-all`` and the API's internal scheduler trigger both call
+    :func:`run_all_checks`; this is what they render.
+    """
+
+    outcomes: list[CheckOutcome]
+    skipped: int
+    delivery: DeliveryReport
+
+    @property
+    def checked(self) -> int:
+        return len(self.outcomes)
+
+    @property
+    def failed(self) -> int:
+        return sum(1 for outcome in self.outcomes if outcome.status is CheckStatus.FAILED)
+
+
+def run_all_checks(
+    settings: Settings,
+    *,
+    limit: int = 100,
+    registry: StoreRegistry | None = None,
+) -> CheckAllSummary:
+    """Check every schedulable product once, now.
+
+    Sequential and unthrottled -- this is a bulk sweep, not the scheduler. Each product is
+    claimed first, the same guard the scheduler's own job execution uses, so this is safe
+    to run beside a live worker, or to trigger twice at once (e.g. an external cron
+    overlapping a run still in progress): a product already claimed elsewhere is skipped,
+    never checked twice.
+
+    Delivery happens once at the end, in its own transaction, so one slow notification
+    provider cannot stall the sweep.
+    """
+    # Imported here, not at module level: scheduler/__init__ imports runner -> workers ->
+    # check_worker -> this module, so a top-level import of scheduler.claims would make
+    # this module and the scheduler package initialise each other.
+    from ..scheduler.claims import claimed
+
+    with session_scope() as session:
+        product_ids = [p.id for p in ProductRepository(session).list_schedulable()][:limit]
+
+    if not product_ids:
+        empty = DeliveryReport(created=0, sent=0, failed=0, suppressed=0)
+        return CheckAllSummary(outcomes=[], skipped=0, delivery=empty)
+
+    outcomes: list[CheckOutcome] = []
+    skipped = 0
+    active_registry = registry or default_registry()
+    # One browser for the whole sweep -- see the CLI's check-all docstring for why this is
+    # safe only because the loop below is sequential.
+    with browser.session(headless=settings.playwright_headless):
+        for product_id in product_ids:
+            with claimed(product_id) as granted:
+                if not granted:
+                    skipped += 1
+                    continue
+                outcomes.append(
+                    run_check(
+                        product_id,
+                        settings=settings,
+                        registry=active_registry,
+                        deliver=False,
+                    )
+                )
+
+    delivery = deliver_pending(settings)
+    return CheckAllSummary(outcomes=outcomes, skipped=skipped, delivery=delivery)
 
 
 def replace_sent(outcome: CheckOutcome, sent: int) -> CheckOutcome:

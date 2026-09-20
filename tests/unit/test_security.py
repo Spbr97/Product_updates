@@ -10,9 +10,11 @@ from product_tracker.core.security import (
     requires_key_for_reads,
     valid_keys,
     verify_api_key,
+    verify_internal_token,
 )
 
 KEY = "s3cret-api-key"
+TOKEN = "s3cret-internal-token"
 
 
 def settings(**overrides: object) -> Settings:
@@ -126,3 +128,31 @@ class TestKeyRotation:
 
         assert not is_auth_enabled(instance)
         assert verify_api_key(instance, None)
+
+
+class TestInternalToken:
+    """Unlike API_KEY, an unset token refuses every request -- there is no anonymous
+    fallback for a route that triggers outbound checks against every tracked listing."""
+
+    @pytest.mark.parametrize("presented", [None, "", "anything", TOKEN])
+    def test_unset_token_refuses_everything(self, presented: str | None) -> None:
+        assert not verify_internal_token(settings(), presented)
+
+    def test_correct_token_verifies(self) -> None:
+        assert verify_internal_token(settings(internal_scheduler_token=TOKEN), TOKEN)
+
+    @pytest.mark.parametrize(
+        "presented",
+        [None, "", "wrong", TOKEN[:-1], TOKEN + "x", TOKEN.upper()],
+    )
+    def test_wrong_or_missing_token_fails(self, presented: str | None) -> None:
+        assert not verify_internal_token(settings(internal_scheduler_token=TOKEN), presented)
+
+    def test_a_blank_token_means_unset(self) -> None:
+        instance = settings(internal_scheduler_token="")
+        assert instance.internal_scheduler_token is None
+        assert not verify_internal_token(instance, None)
+
+    def test_the_token_is_not_exposed_by_repr(self) -> None:
+        instance = settings(internal_scheduler_token=TOKEN)
+        assert TOKEN not in repr(instance.internal_scheduler_token)

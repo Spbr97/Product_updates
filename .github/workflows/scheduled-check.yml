@@ -1,0 +1,57 @@
+name: Scheduled check
+
+# The free deployment has no persistent worker (see render.yaml), so this is what runs
+# `check-all`: a POST to the internal scheduler trigger, on a schedule, instead of a
+# third-party cron service. Requires two repository secrets:
+#
+#   RENDER_APP_URL             e.g. https://product-tracker.onrender.com
+#   INTERNAL_SCHEDULER_TOKEN   the same value set on the Render service
+#
+# GitHub Actions cron runs in UTC. Every three hours, on the hour.
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  # A sweep already running is not superseded by a new one -- see it finish, then run the
+  # next one on schedule. Cancelling a sweep mid-run would leave claimed products stuck
+  # until their lease expires for no benefit.
+  group: scheduled-check
+  cancel-in-progress: false
+
+jobs:
+  check-all:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the instance
+        # A free instance that has been idle is asleep; the first request cold-starts it,
+        # which can take the better part of a minute. Poll /health (cheap, no database
+        # dependency) until it answers, rather than let the check-all request itself time
+        # out mid cold-start.
+        run: |
+          for _ in $(seq 1 12); do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 15 \
+              "${RENDER_APP_URL%/}/health" || echo "000")
+            [ "$code" = "200" ] && exit 0
+            sleep 5
+          done
+          echo "::error::instance did not respond to /health in time"
+          exit 1
+        env:
+          RENDER_APP_URL: ${{ secrets.RENDER_APP_URL }}
+
+      - name: Trigger check-all
+        run: |
+          status=$(curl -sS -o response.json -w "%{http_code}" --max-time 300 -X POST \
+            "${RENDER_APP_URL%/}/internal/scheduler/check-all" \
+            -H "X-Internal-Token: ${INTERNAL_SCHEDULER_TOKEN}")
+          echo "HTTP $status"
+          cat response.json
+          if [ "$status" -ge 300 ]; then
+            echo "::error::check-all returned HTTP $status"
+            exit 1
+          fi
+        env:
+          RENDER_APP_URL: ${{ secrets.RENDER_APP_URL }}
+          INTERNAL_SCHEDULER_TOKEN: ${{ secrets.INTERNAL_SCHEDULER_TOKEN }}

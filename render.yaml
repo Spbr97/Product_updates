@@ -1,0 +1,56 @@
+# Render Blueprint for the free-tier deployment: this web service, on Render's free plan.
+#
+# PostgreSQL is deliberately NOT provisioned here. Render's free plan does not include a
+# persistent free database (its Postgres offering is paid, with only a 30-day trial), so
+# the database lives on Supabase instead -- see docs/deployment-free-tier.md for the
+# one-time setup. DATABASE_URL below is `sync: false`: Render will prompt for it and store
+# it as a secret, never committed.
+#
+# There is also no background-worker service here. Render's free plan cannot run one
+# (background workers need a paid plan, and a free web service is stopped between
+# requests). Scheduled checks instead come from an external trigger calling
+# POST /internal/scheduler/check-all -- see .github/workflows/scheduled-check.yml, which
+# uses GitHub Actions' own cron (no third-party cron account needed) and, as a side
+# effect, wakes a sleeping free instance back up.
+services:
+  - type: web
+    name: product-tracker
+    runtime: docker
+    plan: free
+    dockerfilePath: docker/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    # Runs once per deploy, before traffic is routed to the new instance. If your Render
+    # plan/instance type does not offer pre-deploy commands, run this once by hand instead
+    # (Render's dashboard Shell, or `alembic upgrade head` from a one-off job) -- see the doc.
+    preDeployCommand: alembic upgrade head
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: INTERNAL_SCHEDULER_TOKEN
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
+      - key: LOG_FORMAT
+        value: json
+      - key: API_ALLOW_ANONYMOUS_READS
+        value: "false"
+      # Chromium does not fit in a free instance's memory, and the base image here has no
+      # browser installed anyway (see docker/Dockerfile's EXTRAS build arg). Off, not a
+      # missing feature: every store this project verifies against works without it except
+      # Amazon India's delivery-area localisation (README section "Delivery location").
+      - key: PLAYWRIGHT_ENABLED
+        value: "false"
+      - key: NOTIFY_DEFAULT_PROVIDERS
+        value: console
+      - key: STORE_MIN_INTERVAL_SECONDS
+        value: "5"
+      - key: FETCH_JITTER_SECONDS
+        value: "3"
+      # Matches the scheduled-check workflow's cron. Cosmetic here -- nothing on Render
+      # reads this to decide when to run, since there is no worker -- but `status` and
+      # `config` report it, and it should describe reality.
+      - key: CHECK_INTERVAL_SECONDS
+        value: "10800"

@@ -46,6 +46,9 @@ def status() -> None:
     summary.add_row("check interval", f"{settings.check_interval_seconds}s")
     summary.add_row("playwright", yes_no(settings.playwright_enabled))
     summary.add_row("api key set", yes_no(settings.api_key is not None))
+    summary.add_row(
+        "internal scheduler token set", yes_no(settings.internal_scheduler_token is not None)
+    )
     summary.add_row("providers", ", ".join(settings.notification_providers) or "-")
     stdout.print(summary)
 

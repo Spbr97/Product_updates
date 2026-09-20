@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..core.config import Settings, get_settings
-from ..core.security import requires_key_for_reads, verify_api_key
+from ..core.security import requires_key_for_reads, verify_api_key, verify_internal_token
 from ..db.models import User
 from ..db.session import get_session_factory
 from ..repositories.users import UserRepository
@@ -90,6 +90,40 @@ def require_read(
     if requires_key_for_reads(settings) and not verify_api_key(settings, api_key):
         raise _unauthorised()
 
+
+#: Sent by the external cron trigger. A separate header, and a separate secret, from
+#: ``X-API-Key`` -- this guards outbound checks against every tracked listing, not
+#: per-account data, and rotating one must never require rotating the other.
+INTERNAL_TOKEN_HEADER = "X-Internal-Token"
+
+InternalTokenHeader = Annotated[
+    str | None,
+    Header(alias=INTERNAL_TOKEN_HEADER, description="Required: INTERNAL_SCHEDULER_TOKEN."),
+]
+
+
+def _internal_unauthorised() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=f"missing or invalid {INTERNAL_TOKEN_HEADER}",
+        headers={
+            "WWW-Authenticate": (
+                f'ApiKey realm="product-tracker-internal", header="{INTERNAL_TOKEN_HEADER}"'
+            )
+        },
+    )
+
+
+def require_internal_token(
+    settings: Annotated[Settings, Depends(get_config)], token: InternalTokenHeader = None
+) -> None:
+    """Guard the internal scheduler trigger. Unlike ``require_write``, there is no
+    "unset means open" case -- see ``verify_internal_token``."""
+    if not verify_internal_token(settings, token):
+        raise _internal_unauthorised()
+
+
+RequireInternalToken = Depends(require_internal_token)
 
 DbSession = Annotated[Session, Depends(get_db)]
 Config = Annotated[Settings, Depends(get_config)]

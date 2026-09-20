@@ -68,6 +68,22 @@ def requires_key_for_reads(settings: Settings) -> bool:
     return is_auth_enabled(settings) and not settings.api_allow_anonymous_reads
 
 
+def verify_internal_token(settings: Settings, presented: str | None) -> bool:
+    """Whether ``presented`` matches ``INTERNAL_SCHEDULER_TOKEN``.
+
+    Unlike ``verify_api_key``, there is no "unset means open" case: this guards a route
+    that triggers outbound checks against every tracked listing, and an external cron
+    trigger is meaningless without a token configured to protect it. Unset means every
+    request is refused.
+    """
+    if settings.internal_scheduler_token is None:
+        return False
+    configured = settings.internal_scheduler_token.get_secret_value()
+    if not presented:
+        return False
+    return secrets.compare_digest(presented, configured)
+
+
 #: Prefix on generated keys. Makes one recognisable in a log or a config file, and makes
 #: leaked-secret scanners able to spot it.
 API_KEY_PREFIX = "pt_"

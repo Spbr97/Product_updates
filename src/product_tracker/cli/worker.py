@@ -8,15 +8,10 @@ from typing import Annotated
 import typer
 
 from ..core.config import get_settings
-from ..db.session import session_scope
 from ..domain.enums import CheckStatus
-from ..repositories.products import ProductRepository
-from ..scheduler.claims import claimed
 from ..scheduler.lock import WorkerAlreadyRunningError
 from ..scheduler.runner import WorkerRunner, desired_schedule
-from ..services.check_runner import deliver_pending, run_check
-from ..stores import browser
-from ..stores.registry import default_registry
+from ..services.check_runner import run_all_checks
 from ..utils.money import format_money
 from .formatting import ExitCode, error, info, stdout, success, table, warn
 
@@ -74,50 +69,27 @@ def check_all(
     """
     settings = get_settings()
 
-    with session_scope() as session:
-        product_ids = [p.id for p in ProductRepository(session).list_schedulable()][:limit]
+    summary = run_all_checks(settings, limit=limit)
 
-    if not product_ids:
+    if not summary.outcomes and not summary.skipped:
         warn("no active products to check")
         return
 
-    results = table(f"Checked {len(product_ids)} product(s)", ["Product", "Status", "Price"])
-    failures = 0
-    skipped = 0
-    # One browser for the whole sweep. Launching Chromium costs about eighteen seconds and
-    # a one-shot render pays it per product, so five browser-rendered products went from
-    # roughly a hundred seconds to under forty. Safe here precisely because this loop is
-    # sequential -- the scheduler's thread pool is why the worker does not do this.
-    with browser.session(headless=settings.playwright_headless):
-        for product_id in product_ids:
-            with claimed(product_id) as granted:
-                if not granted:
-                    skipped += 1
-                    results.add_row(str(product_id), "[dim]already running[/dim]", "")
-                    continue
-                # Deliver once at the end rather than after each product, so one slow
-                # provider does not stall the whole run.
-                outcome = run_check(
-                    product_id, settings=settings, registry=default_registry(), deliver=False
-                )
-            if outcome.status is CheckStatus.FAILED:
-                failures += 1
-            results.add_row(
-                str(product_id),
-                _status_markup(outcome.status),
-                format_money(
-                    Decimal(outcome.price) if outcome.price else None, outcome.currency
-                ),
-            )
+    results = table(f"Checked {summary.checked} product(s)", ["Product", "Status", "Price"])
+    for outcome in summary.outcomes:
+        results.add_row(
+            str(outcome.product_id),
+            _status_markup(outcome.status),
+            format_money(Decimal(outcome.price) if outcome.price else None, outcome.currency),
+        )
 
     stdout.print(results)
-    if skipped:
-        info(f"{skipped} product(s) were already being checked elsewhere, and were skipped")
-    report = deliver_pending(settings)
-    if report.sent or report.failed:
-        info(f"alerts: {report.sent} sent, {report.failed} failed")
-    if failures:
-        warn(f"{failures} of {len(product_ids)} checks failed")
+    if summary.skipped:
+        info(f"{summary.skipped} product(s) were already being checked elsewhere, and were skipped")
+    if summary.delivery.sent or summary.delivery.failed:
+        info(f"alerts: {summary.delivery.sent} sent, {summary.delivery.failed} failed")
+    if summary.failed:
+        warn(f"{summary.failed} of {summary.checked} checks failed")
         raise typer.Exit(ExitCode.STORE_FAILURE)
 
 
