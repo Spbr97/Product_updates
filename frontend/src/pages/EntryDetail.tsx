@@ -8,6 +8,9 @@ import {
 } from "../api";
 import { cheapestListingId, describe, priceText } from "../lib/listingState";
 import { RetailerPanel } from "../components/RetailerPanel";
+import { AddRetailerPanel } from "../components/AddRetailerPanel";
+
+const ENTRY_STORES = ["amazon-in", "flipkart"] as const;
 
 /**
  * The Product Entry detail page (SDD §51/§52): per-retailer panels, a comparison table,
@@ -112,6 +115,17 @@ export function EntryDetail() {
             onChanged={load}
           />
         ))}
+        {entry.status === "active" &&
+          ENTRY_STORES.filter(
+            (store) => !active.some((l) => l.store === store),
+          ).map((store) => (
+            <AddRetailerPanel
+              key={store}
+              entryId={entry.id}
+              store={store}
+              onAdded={load}
+            />
+          ))}
       </section>
 
       <section>

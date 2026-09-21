@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ...domain.enums import (
     Availability,
@@ -36,10 +36,11 @@ class ListingInputSchema(BaseModel):
 
 
 class ProductEntryCreate(BaseModel):
-    """Create one entry with one Amazon and one Flipkart listing.
+    """Create one entry with an Amazon listing, a Flipkart listing, or both.
 
-    Both retailers are required in v1. An entry with one shop cannot compare anything,
-    which is the whole point of the thing.
+    At least one retailer is required -- an entry tracking nothing is not an entry -- but
+    neither is mandatory on its own. Comparison fills in once a second shop is attached,
+    either here or afterward via ``POST /{entry_id}/listings``.
     """
 
     product_name: str = Field(
@@ -48,8 +49,24 @@ class ProductEntryCreate(BaseModel):
         description="The canonical name. Not unique -- two entries may share one.",
         examples=["Samsung Galaxy S25 256GB"],
     )
-    amazon: ListingInputSchema
-    flipkart: ListingInputSchema
+    amazon: ListingInputSchema | None = None
+    flipkart: ListingInputSchema | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one_retailer(self) -> ProductEntryCreate:
+        if self.amazon is None and self.flipkart is None:
+            raise ValueError("at least one of amazon or flipkart is required")
+        return self
+
+
+class ListingCreate(BaseModel):
+    """Add the retailer an entry does not have yet."""
+
+    store: str = Field(
+        description="Which retailer this listing is for, e.g. 'amazon-in' or 'flipkart'."
+    )
+    product_name: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=8192)
 
 
 class ProductEntryUpdate(BaseModel):

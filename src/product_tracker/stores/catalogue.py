@@ -86,10 +86,16 @@ KNOWN_STORES: tuple[StoreInfo, ...] = (
     # Amazon *product* pages serve us; the homepage answers with an AWS WAF JavaScript
     # challenge, which is a security control and is left alone. The pages carry no JSON-LD,
     # so they need buy-box selectors of their own -- see stores/amazon.py.
+    #
+    # amzn.in / amzn.to are Amazon's own share-link shorteners (the "Share" button on the
+    # app and site produces these, not a full amazon.in URL). They 3xx-redirect straight to
+    # the real product page; ``http_fetch`` follows redirects itself (stores/http.py) and
+    # ``AmazonAdapter._interpret`` reads the ASIN off the *resolved* URL, so nothing past
+    # store resolution needs to know the link started out shortened.
     StoreInfo(
         slug="amazon-in",
         display_name="Amazon India",
-        domains=("amazon.in",),
+        domains=("amazon.in", "amzn.in", "amzn.to"),
         adapter_key="amazon-in",
     ),
     StoreInfo(

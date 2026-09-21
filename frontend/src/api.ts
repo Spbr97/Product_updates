@@ -178,8 +178,8 @@ export interface ListingInput {
 }
 export interface CreatePayload {
   product_name: string;
-  amazon: ListingInput;
-  flipkart: ListingInput;
+  amazon?: ListingInput;
+  flipkart?: ListingInput;
 }
 
 /** The one error shape the API ever returns. */
@@ -336,6 +336,8 @@ export const api = {
     ),
   deactivateListing: (id: number, listingId: number) =>
     request<void>("DELETE", `/product-entries/${id}/listings/${listingId}`),
+  addListing: (id: number, payload: { store: string; product_name: string; url: string }) =>
+    request<ListingResponse>("POST", `/product-entries/${id}/listings`, payload),
   history: (id: number) =>
     request<EntryHistory>("GET", `/product-entries/${id}/history`),
   stats: (id: number) =>

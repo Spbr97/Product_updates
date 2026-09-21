@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { renderApp } from "../test/render";
@@ -32,12 +32,37 @@ describe("Add Product form (SDD §51, §58.1-6)", () => {
     }
   });
 
-  it("refuses a submit with a missing field", async () => {
+  it("refuses a submit with neither shop filled in", async () => {
     const user = userEvent.setup();
     renderApp("/products/new");
     await user.type(screen.getByLabelText("Product name"), "only a name");
     await user.click(screen.getByRole("button", { name: "Add product" }));
-    expect(await screen.findByText(/every field is required/i)).toBeInTheDocument();
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(/Amazon, Flipkart, or both/i)).toBeInTheDocument();
+  });
+
+  it("refuses a shop with only one of its two fields filled in", async () => {
+    const user = userEvent.setup();
+    renderApp("/products/new");
+    await user.type(screen.getByLabelText("Product name"), "S25");
+    await user.type(screen.getByLabelText("Amazon product URL"), AMZ);
+    await user.click(screen.getByRole("button", { name: "Add product" }));
+    expect(
+      await screen.findByText(/both the amazon name and url/i),
+    ).toBeInTheDocument();
+  });
+
+  it("creates an entry with only Amazon filled in", async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp("/products/new");
+    await user.type(screen.getByLabelText("Product name"), "Amazon Only");
+    await user.type(screen.getByLabelText("Amazon product name"), "a");
+    await user.type(screen.getByLabelText("Amazon product URL"), AMZ);
+    await user.click(screen.getByRole("button", { name: "Add product" }));
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toMatch(/^\/products\/\d+$/),
+    );
   });
 
   it("names the retailer when an Amazon link is really a Flipkart link", async () => {

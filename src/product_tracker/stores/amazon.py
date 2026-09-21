@@ -122,7 +122,9 @@ def read_price_to_pay(soup: BeautifulSoup) -> Decimal | None:
 class AmazonAdapter(DomainMatchAdapter):
     slug: ClassVar[str] = "amazon-in"
     display_name: ClassVar[str] = "Amazon India"
-    domains: ClassVar[tuple[str, ...]] = ("amazon.in",)
+    # amzn.in / amzn.to are Amazon's own share-link shorteners; see the matching comment
+    # in stores/catalogue.py for why nothing downstream needs special-casing for them.
+    domains: ClassVar[tuple[str, ...]] = ("amazon.in", "amzn.in", "amzn.to")
 
     @property
     def selectors(self) -> selector_config.SelectorSet:

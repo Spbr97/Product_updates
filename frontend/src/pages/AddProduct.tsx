@@ -19,11 +19,16 @@ const EMPTY: Fields = {
 };
 
 /**
- * The Add Product form (SDD §51). One product, tracked at both shops.
+ * The Add Product form (SDD §51). One product, tracked at Amazon, at Flipkart, or both.
+ *
+ * A shop's two fields (name, URL) are a unit: fill both or leave both blank. At least one
+ * shop is required -- an entry tracking nothing is not an entry -- but neither shop is
+ * mandatory on its own, so a single-shop product does not force a second URL that does not
+ * exist. The other shop can be attached later from the product page.
  *
  * Two behaviours the spec is explicit about, and both easy to get wrong:
- * - Every field keeps its value when the submit is rejected. Retyping five fields because
- *   one was wrong is a small cruelty that stops people using a thing.
+ * - Every field keeps its value when the submit is rejected. Retyping fields because one
+ *   was wrong is a small cruelty that stops people using a thing.
  * - The submit disables itself the moment it is pressed, so a double click cannot become
  *   a second product before the server's 409 comes back.
  */
@@ -40,9 +45,27 @@ export function AddProduct() {
     e.preventDefault();
     if (busy) return;
 
-    const missing = Object.values(f).some((v) => v.trim() === "");
-    if (missing) {
-      setErrors(["Every field is required."]);
+    const problems: string[] = [];
+    if (f.product_name.trim() === "") problems.push("Product name is required.");
+
+    const amazonGiven = f.amazon_name.trim() !== "" || f.amazon_url.trim() !== "";
+    const amazonComplete = f.amazon_name.trim() !== "" && f.amazon_url.trim() !== "";
+    if (amazonGiven && !amazonComplete) {
+      problems.push("Fill in both the Amazon name and URL, or leave both blank.");
+    }
+
+    const flipkartGiven = f.flipkart_name.trim() !== "" || f.flipkart_url.trim() !== "";
+    const flipkartComplete = f.flipkart_name.trim() !== "" && f.flipkart_url.trim() !== "";
+    if (flipkartGiven && !flipkartComplete) {
+      problems.push("Fill in both the Flipkart name and URL, or leave both blank.");
+    }
+
+    if (!amazonComplete && !flipkartComplete) {
+      problems.push("Track this product at Amazon, Flipkart, or both.");
+    }
+
+    if (problems.length > 0) {
+      setErrors(problems);
       return;
     }
 
@@ -51,13 +74,17 @@ export function AddProduct() {
     try {
       const entry = await api.createEntry({
         product_name: f.product_name,
-        amazon: { product_name: f.amazon_name, url: f.amazon_url },
-        flipkart: { product_name: f.flipkart_name, url: f.flipkart_url },
+        amazon: amazonComplete
+          ? { product_name: f.amazon_name, url: f.amazon_url }
+          : undefined,
+        flipkart: flipkartComplete
+          ? { product_name: f.flipkart_name, url: f.flipkart_url }
+          : undefined,
       });
       navigate(`/products/${entry.id}`);
     } catch (err) {
       // The server's own message, verbatim. "Invalid input" would tell the user nothing
-      // about which of the five fields to fix.
+      // about which field to fix.
       setErrors([err instanceof ApiError ? err.message : "That didn't go through."]);
       setBusy(false);
     }
@@ -67,13 +94,14 @@ export function AddProduct() {
     <>
       <h1>Add product</h1>
       <p className="lede">
-        One product, tracked at both shops. Each shop keeps its own price and its own
-        history; nothing is averaged or merged.
+        One product, tracked at Amazon, Flipkart, or both. Each shop keeps its own price
+        and its own history; nothing is averaged or merged. Add the other shop later from
+        the product page if you only have one link now.
       </p>
 
       {errors.length > 0 && (
         <div className="errors" role="alert">
-          <strong>That didn&rsquo;t go through.</strong>
+          <strong>Fix the following:</strong>
           <ul>
             {errors.map((m) => (
               <li key={m}>{m}</li>
@@ -94,7 +122,7 @@ export function AddProduct() {
         <p className="hint">What you call it. Yours, not the shop&rsquo;s.</p>
 
         <fieldset>
-          <legend>Amazon</legend>
+          <legend>Amazon (optional)</legend>
           <label htmlFor="amazon_name">Amazon product name</label>
           <input
             id="amazon_name"
@@ -109,11 +137,13 @@ export function AddProduct() {
             onChange={set("amazon_url")}
             placeholder="https://www.amazon.in/dp/..."
           />
-          <p className="hint">Must be an amazon.in link.</p>
+          <p className="hint">
+            An amazon.in link, or an amzn.in/amzn.to share link &mdash; both work.
+          </p>
         </fieldset>
 
         <fieldset>
-          <legend>Flipkart</legend>
+          <legend>Flipkart (optional)</legend>
           <label htmlFor="flipkart_name">Flipkart product name</label>
           <input
             id="flipkart_name"

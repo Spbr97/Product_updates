@@ -43,7 +43,6 @@ export function App() {
         </Link>
         <nav>
           <Link to="/products">Products</Link>
-          <Link to="/compare">Compare</Link>
           {signedIn && (
             <button className="button ghost small" onClick={signOut} type="button">
               Sign out

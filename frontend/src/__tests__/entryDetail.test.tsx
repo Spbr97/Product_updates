@@ -159,6 +159,58 @@ describe("Product Entry detail (SDD §51-52, §58.7-13)", () => {
     expect(await screen.findByText("No such product.")).toBeInTheDocument();
   });
 
+  it("offers to add the missing retailer, and attaches it once submitted", async () => {
+    reset();
+    const now = new Date().toISOString();
+    const entry: ProductEntry = {
+      id: 1,
+      product_name: "Amazon Only",
+      status: "active",
+      created_at: now,
+      updated_at: now,
+      deleted_at: null,
+      listings: [
+        {
+          id: 2,
+          store: "amazon-in",
+          store_name: "Amazon India",
+          product_name: "S25 on Amazon",
+          url: "https://www.amazon.in/dp/B0TEST01",
+          product_id: 20,
+          price: null,
+          currency: null,
+          availability: "unknown",
+          tracking_status: "active",
+          last_checked_at: null,
+          last_check_status: null,
+          last_check_error: null,
+          is_active: true,
+          deactivated_at: null,
+        },
+      ],
+    };
+    db.entries.set(1, entry);
+    db.nextId = 2;
+
+    const user = userEvent.setup();
+    renderApp("/products/1");
+    await screen.findByRole("heading", { name: "Amazon Only" });
+
+    expect(screen.getByText("Not tracked at Flipkart yet.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add Flipkart link" }));
+    await user.type(screen.getByLabelText("Flipkart product name"), "S25 on Flipkart");
+    await user.type(
+      screen.getByLabelText("Flipkart product URL"),
+      "https://www.flipkart.com/x/p/itmtest01",
+    );
+    await user.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("S25 on Flipkart")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Not tracked at Flipkart yet.")).not.toBeInTheDocument();
+  });
+
   it("checking one shop does not re-read the other", async () => {
     const user = userEvent.setup();
     let entryChecks = 0;

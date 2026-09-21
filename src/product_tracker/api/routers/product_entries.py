@@ -32,6 +32,7 @@ from ..schemas.product_entries import (
     EntryHistoryResponse,
     EntryStatsResponse,
     ListingCheckResult,
+    ListingCreate,
     ListingHistory,
     ListingResponse,
     ListingStats,
@@ -148,7 +149,7 @@ def _entry_page(session: DbSession, entries: Sequence[ProductEntry]) -> list[Pro
     "",
     response_model=ProductEntryResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a Product Entry with its Amazon and Flipkart listings",
+    summary="Create a Product Entry with an Amazon listing, a Flipkart listing, or both",
     dependencies=[RequireWrite],
     responses={409: _CONFLICT, 422: _BAD_URL},
 )
@@ -158,10 +159,10 @@ def create_entry(
     settings: Config,
     user: CurrentUser,
 ) -> ProductEntryResponse:
-    """Create one entry and both of its listings, in one transaction.
+    """Create one entry and whichever of its listings were given, in one transaction.
 
-    Returns before either retailer has been read, so the listings come back with a null
-    price. Making the caller wait on two shops would turn a form submission into a
+    Returns before any retailer has been read, so the listings come back with a null
+    price. Making the caller wait on the shops would turn a form submission into a
     thirty-second stare at a spinner and tie this response's latency to whichever retailer
     is slowest today.
 
@@ -174,11 +175,45 @@ def create_entry(
     service = _service(session, settings, user.id)
     entry = service.create(
         payload.product_name,
-        amazon=ListingInput(payload.amazon.product_name, payload.amazon.url),
-        flipkart=ListingInput(payload.flipkart.product_name, payload.flipkart.url),
+        amazon=ListingInput(payload.amazon.product_name, payload.amazon.url)
+        if payload.amazon
+        else None,
+        flipkart=ListingInput(payload.flipkart.product_name, payload.flipkart.url)
+        if payload.flipkart
+        else None,
     )
     session.flush()
     return _entry_response(session, entry)
+
+
+@router.post(
+    "/{entry_id}/listings",
+    response_model=ListingResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add the retailer this entry does not have yet",
+    dependencies=[RequireWrite],
+    responses={404: _NOT_FOUND, 409: _CONFLICT, 422: _BAD_URL},
+)
+def add_listing(
+    entry_id: int,
+    payload: ListingCreate,
+    session: DbSession,
+    settings: Config,
+    user: CurrentUser,
+) -> ListingResponse:
+    """Attach Amazon or Flipkart to an entry created with only the other one.
+
+    Refused if this entry already has a live listing for that retailer -- use the rename
+    /re-point endpoint on the existing listing instead of adding a second one.
+    """
+    listing = _service(session, settings, user.id).add_listing(
+        entry_id,
+        store_slug=payload.store,
+        listing=ListingInput(payload.product_name, payload.url),
+    )
+    session.flush()
+    session.refresh(listing)
+    return _listing_response(listing, _last_executions(session, [listing.product_id]))
 
 
 @router.get(

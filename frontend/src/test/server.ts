@@ -82,6 +82,8 @@ function fresh(name: string): ProductEntry {
   return entry;
 }
 
+let nextListingId = 100000;
+
 function err(status: number, type: string, message: string) {
   return HttpResponse.json({ error: { type, message, detail: null } }, { status });
 }
@@ -151,18 +153,22 @@ export const handlers = [
   http.post("/api/v1/product-entries", async ({ request }) => {
     const body = (await request.json()) as {
       product_name: string;
-      amazon: { product_name: string; url: string };
-      flipkart: { product_name: string; url: string };
+      amazon?: { product_name: string; url: string };
+      flipkart?: { product_name: string; url: string };
     };
-    if (storeOf(body.amazon.url) !== "amazon-in") {
+    if (!body.amazon && !body.flipkart) {
+      return err(422, "validation_error", "at least one of amazon or flipkart is required");
+    }
+    if (body.amazon && storeOf(body.amazon.url) !== "amazon-in") {
       return err(422, "invalid_store_url", "the Amazon field needs a link from Amazon");
     }
-    if (storeOf(body.flipkart.url) !== "flipkart") {
+    if (body.flipkart && storeOf(body.flipkart.url) !== "flipkart") {
       return err(422, "invalid_store_url", "the Flipkart field needs a link from Flipkart");
     }
+    const wantedUrls = [body.amazon?.url, body.flipkart?.url].filter(Boolean);
     for (const e of db.entries.values()) {
       for (const l of e.listings) {
-        if (l.is_active && (l.url === body.amazon.url || l.url === body.flipkart.url)) {
+        if (l.is_active && wantedUrls.includes(l.url)) {
           return err(
             409,
             "duplicate_listing",
@@ -171,12 +177,67 @@ export const handlers = [
         }
       }
     }
-    const entry = fresh(body.product_name);
-    entry.listings[0].product_name = body.amazon.product_name;
-    entry.listings[0].url = body.amazon.url;
-    entry.listings[1].product_name = body.flipkart.product_name;
-    entry.listings[1].url = body.flipkart.url;
+    const id = db.nextId++;
+    const now = new Date().toISOString();
+    const listings: ListingResponse[] = [];
+    if (body.amazon) {
+      listings.push(
+        listing({
+          id: id * 2,
+          store: "amazon-in",
+          store_name: "Amazon India",
+          url: body.amazon.url,
+          product_name: body.amazon.product_name,
+        }),
+      );
+    }
+    if (body.flipkart) {
+      listings.push(
+        listing({
+          id: id * 2 + 1,
+          store: "flipkart",
+          store_name: "Flipkart",
+          url: body.flipkart.url,
+          product_name: body.flipkart.product_name,
+        }),
+      );
+    }
+    const entry: ProductEntry = {
+      id,
+      product_name: body.product_name,
+      status: "active",
+      created_at: now,
+      updated_at: now,
+      deleted_at: null,
+      listings,
+    };
+    db.entries.set(id, entry);
     return HttpResponse.json(entry, { status: 201 });
+  }),
+
+  http.post("/api/v1/product-entries/:id/listings", async ({ params, request }) => {
+    const entry = db.entries.get(Number(params.id));
+    if (!entry) return err(404, "not_found", "No such entry.");
+    const body = (await request.json()) as {
+      store: string;
+      product_name: string;
+      url: string;
+    };
+    if (entry.listings.some((l) => l.is_active && l.store === body.store)) {
+      return err(409, "conflict", "this entry already has a live listing for that store");
+    }
+    if (storeOf(body.url) !== body.store) {
+      return err(422, "invalid_store_url", `the ${body.store} field needs a matching link`);
+    }
+    const l = listing({
+      id: nextListingId++,
+      store: body.store,
+      store_name: body.store === "amazon-in" ? "Amazon India" : "Flipkart",
+      url: body.url,
+      product_name: body.product_name,
+    });
+    entry.listings.push(l);
+    return HttpResponse.json(l, { status: 201 });
   }),
 
   http.patch("/api/v1/product-entries/:id", async ({ params, request }) => {

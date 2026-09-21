@@ -113,24 +113,33 @@ class ProductEntryService:
     # --- Creation ----------------------------------------------------------------
 
     def create(
-        self, canonical_name: str, *, amazon: ListingInput, flipkart: ListingInput
+        self,
+        canonical_name: str,
+        *,
+        amazon: ListingInput | None = None,
+        flipkart: ListingInput | None = None,
     ) -> ProductEntry:
-        """Create one entry with one Amazon and one Flipkart listing.
+        """Create one entry with an Amazon listing, a Flipkart listing, or both.
 
         Validation runs before anything is written, so a rejected form leaves no trace.
-        The two listings and the entry are staged together; the caller's transaction is
-        what makes them atomic.
+        The listings and the entry are staged together; the caller's transaction is what
+        makes them atomic. At least one retailer is required -- the caller (the API
+        schema) already enforces this, but the service does not trust that alone.
         """
+        if amazon is None and flipkart is None:
+            raise ValidationError("at least one of Amazon or Flipkart is required")
+
         name = self._clean_name(canonical_name, "product name")
-        wanted = {
-            AMAZON_SLUG: ListingInput(
+        wanted: dict[str, ListingInput] = {}
+        if amazon is not None:
+            wanted[AMAZON_SLUG] = ListingInput(
                 self._clean_name(amazon.product_name, "Amazon product name"), amazon.url
-            ),
-            FLIPKART_SLUG: ListingInput(
+            )
+        if flipkart is not None:
+            wanted[FLIPKART_SLUG] = ListingInput(
                 self._clean_name(flipkart.product_name, "Flipkart product name"),
                 flipkart.url,
-            ),
-        }
+            )
 
         # Every URL checked against every rule before the first insert. Validating as we go
         # would let a bad Flipkart URL leave a tracked Amazon product behind.
@@ -157,6 +166,40 @@ class ProductEntryService:
             listings=len(wanted),
         )
         return entry
+
+    def add_listing(
+        self, entry_id: int, *, store_slug: str, listing: ListingInput
+    ) -> RetailerListing:
+        """Attach a retailer an entry does not currently have a live listing for.
+
+        Only ``ENTRY_STORES`` (Amazon, Flipkart) are accepted -- this fills in the shop
+        left out at creation, it is not a general "track anywhere" endpoint. Reuses the
+        same store/duplicate checks ``create`` runs, so a listing added here is held to
+        exactly the same rules as one added on the form.
+        """
+        entry = self.get(entry_id)
+        if store_slug not in ENTRY_STORES:
+            expected = " or ".join(STORES_BY_SLUG[s].display_name for s in ENTRY_STORES)
+            raise ValidationError(f"store must be {expected}")
+        if self.listings.active_for_store(entry_id, store_slug) is not None:
+            store_name = STORES_BY_SLUG[store_slug].display_name
+            raise ValidationError(f"this entry already has a live {store_name} listing")
+
+        name = self._clean_name(
+            listing.product_name, f"{STORES_BY_SLUG[store_slug].display_name} product name"
+        )
+        self._assert_store(store_slug, listing.url)
+        self._assert_not_already_listed(listing.url)
+
+        product = self.products.track_url(listing.url)
+        added = self._add_listing(entry, product, store_slug, name)
+        self.session.flush()
+        log.info(
+            "product_entry.listing_added",
+            product_entry_id=entry_id,
+            store=store_slug,
+        )
+        return added
 
     def _add_listing(
         self, entry: ProductEntry, product: Product, store_slug: str, product_name: str
