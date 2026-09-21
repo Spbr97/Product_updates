@@ -20,10 +20,11 @@ services:
     dockerfilePath: docker/Dockerfile
     dockerContext: .
     healthCheckPath: /health
-    # Runs once per deploy, before traffic is routed to the new instance. If your Render
-    # plan/instance type does not offer pre-deploy commands, run this once by hand instead
-    # (Render's dashboard Shell, or `alembic upgrade head` from a one-off job) -- see the doc.
-    preDeployCommand: alembic upgrade head
+    # No preDeployCommand: confirmed unsupported on Render's free plan (the Blueprint
+    # review step rejects it outright, not just "unavailable at runtime"). Run
+    # `alembic upgrade head` once by hand instead -- Render's dashboard Shell, or from your
+    # own machine with DATABASE_URL pointed at Supabase -- before or after the first
+    # deploy; the app itself never migrates on startup. See docs/deployment-free-tier.md.
     envVars:
       - key: DATABASE_URL
         sync: false

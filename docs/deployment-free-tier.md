@@ -53,16 +53,17 @@ you, rather than you clicking through the dashboard by hand.
      rotated for another purpose: it guards a route that triggers outbound checks against
      every tracked listing, and the GitHub Actions workflow needs it separately from
      whatever client key you hand out.
-3. Deploy. `render.yaml`'s `preDeployCommand` runs `alembic upgrade head` before traffic
-   reaches the new instance. **If your Render plan does not support pre-deploy commands**,
-   run it once yourself instead: Render dashboard → your service → Shell →
-   `alembic upgrade head`.
-4. Once it's live, from the Shell (or locally with `DATABASE_URL` pointed at Supabase):
+3. Deploy. Render's free plan rejects a Blueprint's `preDeployCommand` outright (the
+   review step errors on it before anything deploys), so migrations are not run for you.
+   Run them yourself, once, from your own machine with `DATABASE_URL` pointed at Supabase:
    ```bash
+   alembic upgrade head
    product-tracker stores sync
    product-tracker status
    ```
-5. Verify:
+   Do this before or after the Render deploy — the app never migrates on startup either
+   way, so order doesn't matter, only that it happens once before you rely on the API.
+4. Verify:
    ```bash
    curl https://<your-service>.onrender.com/health
    curl https://<your-service>.onrender.com/health/ready
