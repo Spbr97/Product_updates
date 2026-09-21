@@ -23,7 +23,11 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# ConfigParser (which config.set_main_option writes into) treats a bare "%" as its own
+# interpolation syntax, so a percent-encoded password (e.g. "%40" for a literal "@") would
+# otherwise raise "invalid interpolation syntax" here. Doubling it survives the round trip:
+# get_main_option decodes "%%" back to "%" on read, same as ConfigParser's own escaping.
+config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:
