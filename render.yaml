@@ -54,4 +54,4 @@ services:
       # reads this to decide when to run, since there is no worker -- but `status` and
       # `config` report it, and it should describe reality.
       - key: CHECK_INTERVAL_SECONDS
-        value: "10800"
+        value: "7200"

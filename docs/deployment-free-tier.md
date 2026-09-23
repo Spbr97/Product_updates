@@ -14,7 +14,7 @@ Render's free plan stops a web service between requests and does not offer a fre
 background-worker service at all, so there is nothing to keep it running on. Instead,
 `POST /internal/scheduler/check-all` (added for this deployment) runs one sweep on demand,
 guarded by `INTERNAL_SCHEDULER_TOKEN`, and `.github/workflows/scheduled-check.yml` calls it
-every three hours using GitHub Actions' own cron — no external cron account needed, and the
+every two hours using GitHub Actions' own cron — no external cron account needed, and the
 request incidentally wakes a sleeping instance back up.
 
 If you later move to a host that can run a persistent process, switch back to
@@ -84,7 +84,7 @@ can already serve both.
    - `RENDER_APP_URL` — `https://<your-service>.onrender.com`
    - `INTERNAL_SCHEDULER_TOKEN` — the same value set on Render in step 3.
 2. `.github/workflows/scheduled-check.yml` is already in the repo and runs on its own —
-   nothing to enable. To run it once without waiting three hours: Actions tab →
+   nothing to enable. To run it once without waiting two hours: Actions tab →
    "Scheduled check" → Run workflow.
 3. Watch a run's log: it wakes the instance, then reports the JSON `check-all` returned
    (`checked`, `skipped`, `failures`, `notifications_sent`).
@@ -102,6 +102,6 @@ can already serve both.
   same delay once.
 - **Sweep timing, not per-product timing.** `CHECK_INTERVAL_SECONDS` is no longer what
   decides when a product is checked — the worker that read it is not running. Every active
-  product is checked once per scheduled-check run (every three hours, by the workflow's
+  product is checked once per scheduled-check run (every two hours, by the workflow's
   cron), regardless of its individual `check_interval_seconds`. A per-product interval
-  shorter than three hours has no effect on this path.
+  shorter than two hours has no effect on this path.

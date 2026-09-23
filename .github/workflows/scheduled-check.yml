@@ -7,10 +7,10 @@ name: Scheduled check
 #   RENDER_APP_URL             e.g. https://product-tracker.onrender.com
 #   INTERNAL_SCHEDULER_TOKEN   the same value set on the Render service
 #
-# GitHub Actions cron runs in UTC. Every three hours, on the hour.
+# GitHub Actions cron runs in UTC. Every two hours, on the hour.
 on:
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: "0 */2 * * *"
   workflow_dispatch:
 
 concurrency:
